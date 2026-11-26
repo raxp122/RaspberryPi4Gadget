@@ -138,6 +138,13 @@ LINK = {"connected": True, "ssid": "Corp", "bssid": "00:11:22:33:44:01", "freq":
 wd.scan = lambda iface="wlan0": (APS, "iw", "")
 wd.link_info = lambda iface="wlan0": dict(LINK)
 sysm.tz_current = lambda: "Europe/Rome"
+
+from core import usbgadget  # noqa: E402
+
+usbgadget.status = lambda: "ok"
+usbgadget.start = lambda *a, **k: None
+usbgadget.stop = lambda: None
+usbgadget.host_state = lambda: "configured"
 framework.Manager._status_loop = lambda self: None   # no system polling
 
 
@@ -200,14 +207,14 @@ def main():
     from apps.nettest.targets import TargetsScreen
     from apps.nettest import report as rp
     nt = NetTest(mgr)
-    mgr.stack = [nt]
-    nt.enter()
-    nt.diag.listener.close()
     nt.diag.listener.lldp = {"proto": "LLDP", "name": "SW-FLOOR2", "port": "Gi1/0/12", "port_desc": "Office 2 socket 14",
                              "vlan": 20, "voice_vlan": 30, "mgmt": "10.20.0.2", "desc": "Cisco IOS 15.2"}
     nt.diag.listener.stp = {"proto": "Rapid PVST+", "root_prio": 24576, "root_ext": 20, "root_mac": "00:11:22:aa:bb:cc",
                             "cost": 4, "bridge_prio": 32768, "bridge_mac": "00:11:22:33:44:ff", "port_id": "0x800c",
                             "tc": False, "is_root_port": False}
+    nt.diag.listener.start = lambda: nt.diag.listener   # niente socket veri
+    mgr.stack = [nt]
+    nt.enter()
     for _ in range(100):
         time.sleep(0.1)
         if not nt.diag.running and nt.diag.get("svc")["st"] not in ("wait", "run"):
@@ -244,6 +251,39 @@ def main():
     mon.events = [(t0 + 60, "Roaming 33:44:02 → 33:44:01 (canale 6, -70 dBm)"),
                   (t0 + 100, "Roaming 33:44:01 → 33:44:02 (canale 36, -55 dBm)")]
     shot("wifitest-monitor", mon)
+
+    # History (sample entries)
+    from core import history
+    from apps.nettest.history import HistoryScreen
+    now = time.time()
+    for i, (sw, port, desc, vlan, ip) in enumerate([
+            ("SW-FLOOR2", "Gi1/0/12", "Office 2 socket 14", 20, "10.20.4.37/24"),
+            ("SW-FLOOR2", "Gi1/0/31", "Meeting room B", 20, "10.20.4.81/24"),
+            ("SW-WAREHOUSE", "Gi1/0/5", "Label printer bay 3", 40, "10.40.0.23/24"),
+            ("SW-FLOOR1", "Gi2/0/18", "Reception desk", 20, "")]):
+        history.add(data, "net", {"t": now - i * 5400, "switch": sw, "port": port, "port_desc": desc, "vlan": vlan,
+                                  "ip": ip, "status": {"ip": "ok" if ip else "fail"},
+                                  "summary": {"ip": ip or "Nessuna risposta DHCP"}})
+    for i, (ssid, sig, ch) in enumerate([("Corp", -52, 36), ("Corp", -71, 6), ("Terminals", -77, 11)]):
+        history.add(data, "wifi", {"t": now - i * 4000, "ssid": ssid, "signal": sig, "channel": ch, "n_networks": 3,
+                                   "n_aps": 6, "hints": ["Segnale debole"] if sig < -67 else []})
+    shot("history-net", HistoryScreen(mgr, "net"))
+
+    # Quick keyboard
+    from apps.quickkeys.main import QuickKeys, StorageMode, KeyboardMode, TypeScreen
+    qk = QuickKeys(mgr)
+    qk.state = "ok"
+    shot("quickkeys", qk)
+    sm = StorageMode(mgr)
+    sm.ready, sm.host = True, "configured"
+    shot("quickkeys-storage", sm)
+    km = KeyboardMode(mgr)
+    km.loaded = True
+    km.files = [{"name": "BitLocker PC-0042.txt", "bitlocker": True, "entry": None,
+                 "text": "111111-222222-333333-444444-555555-666666-777777-888888"},
+                {"name": "BypassNRO.txt", "bitlocker": False, "entry": None, "text": "OOBE\\BYPASSNRO"}]
+    shot("quickkeys-keyboard", km)
+    shot("quickkeys-type", TypeScreen(mgr, km.files[0], km))
 
 
 if __name__ == "__main__":

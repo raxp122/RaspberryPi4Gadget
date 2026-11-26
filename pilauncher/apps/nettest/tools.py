@@ -12,6 +12,7 @@ from core.ui import T, Button, ListView, rrect, text
 from .common import Detail
 
 from .active import ActiveScreen
+from .history import HistoryScreen
 from .ipconf import dhcp_test
 from .report import ReportsList
 from .targets import TargetsScreen
@@ -26,6 +27,8 @@ class Tools(Screen):
 
     def build(self):
         items = [
+            {"title": "Storico prese", "subtitle": "Tutti i test fatti, con data, ora, switch e porta",
+             "act": lambda: self.mgr.push(HistoryScreen(self.mgr, "net"))},
             {"title": "Report salvati", "subtitle": "Rileggi, QR code, condividi via web",
              "act": lambda: self.mgr.push(ReportsList(self.mgr))},
             {"title": "Server aziendali", "subtitle": "Lista dei server da controllare (solo su questo Pi)",
