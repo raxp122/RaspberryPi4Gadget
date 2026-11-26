@@ -60,12 +60,21 @@ Si collega il cavo alla porta Ethernet del Pi e i controlli partono da soli, in 
 |---|---|
 | Cavo e link | Velocità, duplex, massimo supportato dallo switch, errori CRC. Avvisa se il link è a 100 Mbit/s quando entrambi arrivano a 1 Gbit/s (tipico di un cavo con coppie rotte) |
 | Switch e porta | Nome dello switch, porta, descrizione, VLAN dati e voce, IP di gestione, letti dagli annunci LLDP e CDP (ascolto fino a 65 s). Rileva se la porta chiede l'autenticazione 802.1X |
-| Indirizzo IP | Indirizzo, gateway, DNS, dominio, server DHCP e durata del lease. Se il DHCP non risponde suggerisce le cause (802.1X, VLAN, IP fisso) |
+| Indirizzo IP | Indirizzo, gateway, DNS, dominio, server DHCP e durata del lease. Se il DHCP non risponde parte un test DHCP dettagliato (vedi sotto) |
 | Gateway | Ping: tempi e pacchetti persi |
 | DNS | Risoluzione di un nome esterno e del dominio interno su ogni server DNS ricevuto |
 | Internet | Prova HTTP e HTTPS: distingue rete libera, proxy o portale, rete bloccata |
 
 Toccando una riga si vedono tutti i dettagli.
+
+### Test DHCP dettagliato
+Quando il DHCP non risponde, il tester invia da solo le richieste DHCP per 12 secondi e registra:
+- le **offerte** ricevute: indirizzo, server, gateway, DNS, relay (più server che rispondono = possibile DHCP non autorizzato);
+- quanti **pacchetti** arrivano dalla porta e da quanti dispositivi;
+- se il **link cade** durante la prova (porta bloccata da port security).
+
+Così si distingue una porta morta (nessun traffico) da una porta attiva che ignora il tester (port security,
+assegnazione legata al MAC del PC, NAC/802.1X). Il test si può lanciare anche da Strumenti.
 
 ### Prese con IP fisso
 Toccando la riga **Indirizzo IP** si sceglie come configurare la porta del tester:

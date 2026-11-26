@@ -187,8 +187,7 @@ class Diagnosis:
                 break
             waited = time.time() - t0
             if waited > DHCP_WAIT or not nd.carrier():
-                self.set("ip", "fail", "Nessuna risposta DHCP · tocca per l'IP fisso",
-                         [("Stato NetworkManager", ipi["nm_state"] or "—")], self._no_dhcp_hints())
+                self._dhcp_failed(ipi)
                 return False
             self.set("ip", "run", f"Attesa DHCP… {int(waited)} s · tocca per l'IP fisso")
             self.stop.wait(1)
@@ -215,6 +214,22 @@ class Diagnosis:
         self.set("ip", "warn" if hints else "ok", f"{ipi['addr']}/{ipi['prefix']} · {kind}", rows, hints)
         return True
 
+    def _dhcp_failed(self, ipi):
+        """Il DHCP di sistema non ha risposto: prova diretta per capire perché."""
+        def prog(t, total, r):
+            self.set("ip", "run", f"Analisi DHCP… {t}/{total} s · {r['frames']} pacchetti ricevuti")
+        try:
+            r = nd.dhcp_probe(12, progress=prog)
+            st, summary, rows, hints = nd.dhcp_probe_report(r)
+        except OSError as e:
+            st, summary, rows, hints = "fail", "Nessuna risposta DHCP", [("Prova diretta", str(e))], []
+        if st == "ok":
+            hints.insert(0, "Il server risponde alla prova diretta ma il sistema non ha preso l'indirizzo: "
+                            "usa Rinnova DHCP negli strumenti")
+        rows.append(("Stato NetworkManager", ipi["nm_state"] or "—"))
+        self.set("ip", "warn" if st == "ok" else "fail", summary + " · tocca per dettagli", rows,
+                 hints + self._no_dhcp_hints())
+
     def _no_dhcp_hints(self):
         h = []
         if self.listener.eapol:
@@ -223,7 +238,6 @@ class Diagnosis:
         if nb and nb.get("vlan"):
             h.append(f"La porta è sulla VLAN {nb['vlan']}: verifica che lì ci sia un DHCP")
         h.append("Se la porta usa un IP fisso, impostalo qui sotto")
-        h.append("Altre cause: porta disattivata o in una VLAN senza DHCP, NAC/802.1X, server DHCP pieno")
         return h
 
     def _check_gw(self):
@@ -475,6 +489,17 @@ def apply_profile(mgr, main, idx):
     mgr.run(lambda: nd.apply_ip_config(prof), done, "Configurazione rete…")
 
 
+def dhcp_test(mgr):
+    if not nd.carrier():
+        mgr.toast("Collega prima il cavo")
+        return
+
+    def done(r):
+        st, summary, rows, hints = nd.dhcp_probe_report(r)
+        mgr.push(Detail(mgr, "Test DHCP", [("Esito", summary)] + rows, hints))
+    mgr.run(lambda: nd.dhcp_probe(12), done, "Test DHCP (12 s)…")
+
+
 class IpScreen(Screen):
     title = "Indirizzo IP"
 
@@ -495,6 +520,8 @@ class IpScreen(Screen):
                           "act": lambda i=i: self.mgr.push(ProfileEdit(self.mgr, self.main, i))})
         items.append({"title": "+ Aggiungi IP fisso", "subtitle": "Indirizzo, maschera, gateway, DNS",
                       "act": lambda: self.mgr.push(ProfileEdit(self.mgr, self.main, None))})
+        items.append({"title": "Test DHCP dettagliato", "subtitle": "Chi risponde, cosa offre, quanto traffico arriva",
+                      "act": lambda: dhcp_test(self.mgr)})
         items.append({"title": "Rileva la rete della porta", "subtitle": "Ascolta il traffico per suggerire rete e gateway",
                       "act": lambda: self.mgr.push(ArpScreen(self.mgr, self.main))})
         old = self.widgets[0].offset if self.widgets else 0
@@ -744,6 +771,8 @@ class Tools(Screen):
             {"title": "Test del cavo", "subtitle": "Controlla le 4 coppie e la distanza di un guasto",
              "act": self.cable},
             {"title": "Rinnova DHCP", "subtitle": "Rilascia e richiede di nuovo l'indirizzo", "act": self.renew},
+            {"title": "Test DHCP dettagliato", "subtitle": "Chi risponde, cosa offre, quanto traffico arriva",
+             "act": lambda: dhcp_test(self.mgr)},
             {"title": "Risolvi un nome (DNS)", "subtitle": "Interroga i DNS ricevuti dal DHCP", "act": self.dns},
         ]
         self.widgets = [ListView(self.body, items, 51, on_select=lambda it: it["act"](), )]
