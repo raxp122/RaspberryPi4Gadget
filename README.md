@@ -32,7 +32,7 @@ Dal Raspberry, via SSH:
 curl -fsSL https://raw.githubusercontent.com/raxp122/RaspberryPi4Gadget/main/install.sh | bash
 ```
 Lo script:
-1. installa i pacchetti necessari (`python3-pygame`, `network-manager`, `bluez`, `fonts-dejavu-core`);
+1. installa i pacchetti necessari (`python3-pygame`, `network-manager`, `bluez`, `fonts-dejavu-core`, `ethtool`, ...);
 2. scarica l'ultima release, ne verifica lo SHA-256 e la mette in `/opt/pilauncher`;
 3. importa calibrazione e impostazioni da una vecchia installazione in `~/pilauncher`, se c'è;
 4. crea il servizio `pilauncher.service` (avvio automatico) e disattiva il login testuale su tty1 (SSH resta attivo).
@@ -49,8 +49,32 @@ curl -fsSL https://raw.githubusercontent.com/raxp122/RaspberryPi4Gadget/<branch>
 - Toccando la barra di stato in alto si torna sempre alla home.
 - La barra di stato mostra Wi-Fi, Bluetooth, temperatura della CPU, `⚡` se l'alimentazione è insufficiente
   e `↑` se c'è un aggiornamento.
+- **Tester rete**: diagnostica della presa Ethernet per l'helpdesk (vedi sotto).
 - **Impostazioni**: Wi-Fi, Bluetooth, Schermo e touch (rotazione, calibrazione, velocità SPI), Data e ora,
   Sistema, Aggiornamenti, Alimentazione.
+
+## Tester rete
+Si collega il cavo alla porta Ethernet del Pi e i controlli partono da soli, in sequenza:
+
+| Controllo | Cosa mostra |
+|---|---|
+| Cavo e link | Velocità, duplex, massimo supportato dallo switch, errori CRC. Avvisa se il link è a 100 Mbit/s quando entrambi arrivano a 1 Gbit/s (tipico di un cavo con coppie rotte) |
+| Switch e porta | Nome dello switch, porta, descrizione, VLAN dati e voce, IP di gestione, letti dagli annunci LLDP e CDP (ascolto fino a 65 s). Rileva se la porta chiede l'autenticazione 802.1X |
+| Indirizzo IP | Indirizzo, gateway, DNS, dominio, server DHCP e durata del lease. Se il DHCP non risponde suggerisce le cause (802.1X, VLAN) |
+| Gateway | Ping: tempi e pacchetti persi |
+| DNS | Risoluzione di un nome esterno e del dominio interno su ogni server DNS ricevuto |
+| Internet | Prova HTTP e HTTPS: distingue rete libera, proxy o portale, rete bloccata |
+
+Toccando una riga si vedono tutti i dettagli. Il pulsante **Strumenti** offre:
+- **Ping continuo** verso un indirizzo a scelta, con grafico dei tempi;
+- **Lampeggia la porta sullo switch**: spegne e riaccende il link ogni 1,5 s per 30 s, così il LED della porta
+  nell'armadio di rete lampeggia e si trova la presa giusta;
+- **Test del cavo** (`ethtool --cable-test`): stato delle 4 coppie e distanza del guasto, se il chip di rete lo supporta;
+- **Rinnova DHCP** con il tempo impiegato;
+- **Risolvi un nome** su tutti i DNS ricevuti.
+
+Il tester ascolta solo il traffico di servizio dello switch (LLDP, CDP, 802.1X) e non invia nulla di insolito sulla
+rete, a parte il lampeggio della porta, che va avviato a mano.
 
 ## Aggiornamenti OTA
 ```
@@ -101,8 +125,10 @@ pilauncher/
 │   ├── keyboard.py         tastiera a schermo
 │   ├── system.py           Wi-Fi, Bluetooth, data/ora, info di sistema, alimentazione
 │   ├── updater.py          aggiornamenti OTA
+│   ├── netdiag.py          diagnostica di rete (link, LLDP/CDP, 802.1X, DHCP, ping, DNS, HTTP)
 │   └── home.py             home e ricerca automatica delle app
 └── apps/
+    ├── nettest.py          app Tester rete
     └── settings.py         app Impostazioni
 ```
 

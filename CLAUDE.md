@@ -38,6 +38,8 @@ Comunicazione con l'utente in italiano.
 - `core/keyboard.py`: tastiera a schermo.
 - `core/system.py`: wrapper per nmcli (Wi-Fi), bluetoothctl, timedatectl, vcgencmd, e modifica della velocità SPI in config.txt.
 - `core/home.py`: orologio e griglia delle app. Le app vengono trovate automaticamente: ogni modulo in `apps/` con un dizionario `APP = {name, icon, color, order, screen}`.
+- `core/netdiag.py`: diagnostica di eth0 (sysfs + ethtool per il link, socket AF_PACKET per LLDP/CDP/EAPOL, `ip -j` e nmcli per IP/DHCP, ping, query DNS fatte a mano con SO_BINDTODEVICE, curl --interface per HTTP/HTTPS, ethtool --cable-test, lampeggio porta con ip link down/up).
+- `apps/nettest.py`: app Tester rete per l'helpdesk (l'utente lavora all'helpdesk di Aboca). Sequenza automatica al collegamento del cavo, dettagli per riga, strumenti (ping continuo, lampeggio porta, test cavo, rinnovo DHCP, DNS).
 - `apps/settings.py`: Wi-Fi, Bluetooth, Schermo e touch, Data e ora, Sistema, Aggiornamenti, Alimentazione.
 - Servizio systemd `pilauncher.service` (gira come root, Restart=always). `getty@tty1` è disattivato.
 
@@ -47,4 +49,4 @@ Comunicazione con l'utente in italiano.
 - Log: `journalctl -u pilauncher -f`. Riavvio: `sudo systemctl restart pilauncher`.
 
 ## Stato
-Launcher installato e funzionante, avvio automatico attivo. Aggiunti gli aggiornamenti OTA (da provare sul Pi). Prossimi passi: verificare Wi-Fi e Bluetooth sull'hardware reale, poi aggiungere altre app.
+Launcher installato e funzionante, avvio automatico attivo. Aggiornamenti OTA funzionanti. Aggiunta l'app Tester rete (da provare sulla rete aziendale: LLDP/CDP, 802.1X, test cavo col PHY BCM54213PE non verificati). Prossimi passi: verificare Wi-Fi e Bluetooth sull'hardware reale, poi aggiungere altre app.
