@@ -12,17 +12,18 @@ from . import system as sysm
 from .ui import T, Button, icon_bt, icon_chevron, icon_wifi, icon_wifi_off, rrect, text, wrap
 
 STATUS_H = 22
+UPDATE_EVERY = 6 * 3600  # controllo automatico degli aggiornamenti
 HEADER_H = 40
 
 
 class Context:
     """Stato condiviso: configurazione, display, touch."""
 
-    def __init__(self, app_dir, display, touch):
-        self.app_dir = app_dir
-        self.display, self.touch = display, touch
-        self.config_path = os.path.join(app_dir, "config.json")
-        self.calib_path = os.path.join(app_dir, "calib.json")
+    def __init__(self, app_dir, data_dir, display, touch, updater=None):
+        self.app_dir, self.data_dir = app_dir, data_dir
+        self.display, self.touch, self.updater = display, touch, updater
+        self.config_path = os.path.join(data_dir, "config.json")
+        self.calib_path = os.path.join(data_dir, "calib.json")
         self.config = load_json(self.config_path, {"rot": 90})
         self.cal = load_json(self.calib_path, None)
 
@@ -366,7 +367,10 @@ class Manager:
             r = text(s, f"{t:.0f}°C", (x, STATUS_H // 2), 12, col, anchor="midright")
             x = r.x - 8
         if self.status.get("power_warn"):
-            text(s, "⚡", (x, STATUS_H // 2), 13, T["warn"], anchor="midright")
+            r = text(s, "⚡", (x, STATUS_H // 2), 13, T["warn"], anchor="midright")
+            x = r.x - 8
+        if self.status.get("update"):
+            text(s, "↑", (x, STATUS_H // 2), 14, T["accent"], bold=True, anchor="midright")
 
     def _status_loop(self):
         n = 0
@@ -375,6 +379,16 @@ class Manager:
                 new = dict(self.status)
                 new["temp"] = sysm.cpu_temp()
                 new["wifi"] = sysm.wifi_quick()
+                up = self.ctx.updater
+                if up and up.enabled and \
+                        time.time() - up.checked_at > (UPDATE_EVERY if up.checked_at else 60):
+                    try:
+                        up.check()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[updater] {e}", flush=True)
+                        up.checked_at = time.time() - UPDATE_EVERY + 1800  # riprova tra 30 min
+                if up:
+                    new["update"] = up.newer_available()
                 if n % 3 == 0:
                     new["bt"] = sysm.bt_powered()[0]
                     th = sysm.throttled()

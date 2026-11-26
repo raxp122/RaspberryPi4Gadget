@@ -1,4 +1,5 @@
 """App Impostazioni: Wi-Fi, Bluetooth, Sistema, Schermo e touch, Data e ora, Alimentazione."""
+import re
 import time
 
 import pygame
@@ -8,7 +9,8 @@ from core.calibrate import CalibScreen
 from core.framework import Message, Screen
 from core.keyboard import Keyboard
 from core.ui import (T, Button, ListView, Toggle, icon_bt, icon_clock, icon_gear, icon_info,
-                     icon_lock, icon_power, icon_screen, icon_wifi, signal_bars, signal_level, text)
+                     icon_lock, icon_power, icon_refresh, icon_screen, icon_wifi, signal_bars, signal_level,
+                     text, wrap)
 
 ROW_H = 48
 
@@ -53,6 +55,9 @@ class SettingsMain(Screen):
              "go": TimeScreen},
             {"title": "Sistema", "subtitle": "Rete, temperatura, memoria, alimentazione", "icon": icon_info,
              "chevron": True, "go": SystemScreen},
+            {"title": "Aggiornamenti", "subtitle": update_subtitle(self.mgr), "icon": icon_refresh,
+             "chevron": True, "go": UpdateScreen,
+             "subtitle_color": T["accent"] if self.mgr.status.get("update") else T["muted"]},
             {"title": "Alimentazione", "subtitle": "Riavvia o spegni", "icon": icon_power, "chevron": True,
              "go": PowerScreen},
         ]
@@ -585,6 +590,136 @@ class PowerScreen(Screen):
 
     def restart_launcher(self):
         self.mgr.quit = True
+
+
+# ============================================================ Aggiornamenti
+def update_subtitle(mgr):
+    up = mgr.ctx.updater
+    if up is None:
+        return ""
+    if up.newer_available():
+        return f"Disponibile {up.latest['tag']} (in uso {up.version})"
+    return f"Versione {up.version}"
+
+
+def clean_notes(body):
+    """Note di release generate da GitHub -> righe leggibili sul display."""
+    out = []
+    for ln in body.splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#") or ln.startswith("**Full Changelog"):
+            continue
+        ln = re.sub(r" by @\S+ in \S+$", "", ln)
+        ln = re.sub(r"https?://\S+", "", ln).strip()
+        if ln.startswith(("* ", "- ")):
+            ln = "• " + ln[2:]
+        out.append(ln)
+    return out
+
+
+class UpdateScreen(Screen):
+    title = "Aggiornamenti"
+
+    def __init__(self, mgr):
+        super().__init__(mgr)
+        self.up = mgr.ctx.updater
+        self.progress = ""
+        self.working = False
+
+    def enter(self):
+        self.build()
+        if self.up.enabled and time.time() - self.up.checked_at > 300:
+            self.check()
+
+    def check(self):
+        def done(_):
+            self.mgr.status["update"] = self.up.newer_available()
+            self.build()
+            if not self.up.newer_available():
+                self.mgr.toast("Il launcher è aggiornato")
+
+        self.mgr.run(self.up.check, done, "Controllo aggiornamenti…")
+
+    def build(self):
+        b = self.body
+        w = b.w - 40
+        self.widgets = []
+        if not self.up.enabled or self.working:
+            return
+        if self.up.newer_available():
+            self.widgets.append(Button((20, b.bottom - 58, w // 2 - 6, 46), "Controlla", self.check))
+            self.widgets.append(Button((20 + w // 2 + 6, b.bottom - 58, w // 2 - 6, 46),
+                                       f"Installa {self.up.latest['tag']}", self.ask_install, "primary", size=14))
+        else:
+            self.widgets.append(Button((20, b.bottom - 58, w, 46), "Controlla aggiornamenti", self.check))
+
+    def draw_content(self, s):
+        b, up = self.body, self.up
+        x = b.x + 20
+        text(s, "Versione in uso", (x, b.y + 14), 12, T["muted"])
+        text(s, up.version, (x, b.y + 30), 20, bold=True)
+        if up.latest:
+            col = T["accent"] if up.newer_available() else T["muted"]
+            text(s, "Ultima pubblicata", (b.centerx, b.y + 14), 12, T["muted"])
+            text(s, up.latest["tag"], (b.centerx, b.y + 30), 20, col, bold=True)
+        y = b.y + 66
+        if not up.enabled:
+            lines = ["Installazione di sviluppo: aggiornamenti disattivati.",
+                     "Installa con lo script da GitHub per attivare gli aggiornamenti OTA."]
+        elif self.working:
+            lines = [self.progress or "Preparazione…", "Non spegnere il Raspberry."]
+        elif up.error:
+            lines = [up.error]
+        elif up.newer_available():
+            lines = ["Novità:"] + (clean_notes(up.latest["notes"]) or ["(nessuna nota)"])
+        elif up.latest:
+            lines = ["Nessun aggiornamento disponibile."]
+        else:
+            lines = []
+        bad = up.rolled_back()
+        if bad and not self.working:
+            lines = [f"{bad} non partiva ed è stata annullata."] + lines
+        max_y = b.bottom - 66
+        for ln in lines:
+            for part in wrap(ln, 13, b.w - 40):
+                if y > max_y - 18:
+                    return
+                text(s, part, (x, y), 13, T["text"] if self.working else T["muted"])
+                y += 18
+
+    def ask_install(self):
+        tag = self.up.latest["tag"]
+        self.mgr.confirm(f"Installare {tag}?", "Il launcher scarica la nuova versione e si riavvia. "
+                         "Se non parte, torna da solo alla versione attuale.", "Installa", self.install)
+
+    def install(self):
+        self.working, self.progress = True, ""
+        self.build()
+
+        def prog(msg):
+            self.progress = msg
+            self.mgr.dirty = True
+
+        def job():
+            try:
+                return self.up.install(prog), None
+            except Exception as e:  # noqa: BLE001
+                return None, e
+
+        def done(res):
+            tag, err = res
+            self.working = False
+            if err is not None:
+                self.build()
+                self.mgr.toast(f"Aggiornamento non riuscito: {err}", 5)
+                return
+            self.mgr.push(Message(self.mgr, f"Aggiornato a {tag}", "Riavvio del launcher…"))
+            self.mgr.run(lambda: time.sleep(1.5), lambda _: setattr(self.mgr, "quit", True))
+
+        self.mgr.run(job, done)
+
+    def resume(self):
+        self.build()
 
 
 # ===================================================================== APP

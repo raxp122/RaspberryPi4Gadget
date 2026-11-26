@@ -15,6 +15,8 @@ os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 import pygame  # noqa: E402
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# config.json e calib.json: fuori dalla cartella del codice, così sopravvivono agli aggiornamenti
+DATA_DIR = os.environ.get("PILAUNCHER_DATA") or APP_DIR
 sys.path.insert(0, APP_DIR)
 
 from core.calibrate import CalibScreen  # noqa: E402
@@ -22,6 +24,7 @@ from core.display import Display  # noqa: E402
 from core.framework import Context, Manager, load_json, save_json  # noqa: E402
 from core.home import Home, discover_apps  # noqa: E402
 from core.touch import Touch, find_device  # noqa: E402
+from core.updater import CONFIRM_AFTER, Updater  # noqa: E402
 
 LEGACY_CALIB = "/home/raspberry/pipboy/touch_calib.json"
 
@@ -29,15 +32,18 @@ LEGACY_CALIB = "/home/raspberry/pipboy/touch_calib.json"
 def main():
     pygame.display.init()
     pygame.font.init()
-    cfg = load_json(os.path.join(APP_DIR, "config.json"), {"rot": 90})
-    calib_path = os.path.join(APP_DIR, "calib.json")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    updater = Updater(APP_DIR, DATA_DIR)
+    print(f"[pilauncher] versione {updater.version}, dati in {DATA_DIR}", flush=True)
+    cfg = load_json(os.path.join(DATA_DIR, "config.json"), {"rot": 90})
+    calib_path = os.path.join(DATA_DIR, "calib.json")
     if not os.path.exists(calib_path) and os.path.exists(LEGACY_CALIB):
         save_json(calib_path, load_json(LEGACY_CALIB, None))  # riusa la calibrazione fatta prima
 
     display = Display(cfg.get("rot", 90))
     dev = cfg.get("touch_device") or find_device()
     touch = Touch(dev, display.size, None, display.rot)
-    ctx = Context(APP_DIR, display, touch)
+    ctx = Context(APP_DIR, DATA_DIR, display, touch, updater)
     touch.set_calibration(ctx.cal, display.rot)
 
     mgr = Manager(display.size, ctx)
@@ -48,6 +54,7 @@ def main():
 
     surf = pygame.Surface(display.size)
     last_draw, last_min = 0.0, -1
+    started = time.time()
 
     def stop(*_):
         mgr.quit = True
@@ -69,6 +76,11 @@ def main():
             mgr.process()
             now = time.time()
             mgr.update(now)
+            if not updater.confirmed and now - started > CONFIRM_AFTER:
+                try:
+                    updater.confirm()
+                except OSError as e:
+                    print(f"[updater] conferma non riuscita: {e}", flush=True)
             minute = time.localtime(now).tm_min
             if minute != last_min:
                 last_min, mgr.dirty = minute, True
