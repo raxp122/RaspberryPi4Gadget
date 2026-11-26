@@ -8,6 +8,9 @@ from .common import ORDER, NAMES, ROW_H, status_icon, icon_net, Detail, targets,
 
 from .diag import Diagnosis
 from .ipconf import IpScreen
+from core import history
+
+from .history import net_entry
 from .report import ask_and_save
 from .targets import TargetsScreen
 from .tools import Tools
@@ -19,6 +22,8 @@ class NetTest(Screen):
     def __init__(self, mgr):
         super().__init__(mgr)
         self.diag = Diagnosis(self._changed, lambda: targets(net_cfg(mgr)))
+        self.diag.on_finished = self._record
+        self.last_hist = None
         self.next_tick = 0
 
     def _changed(self):
@@ -58,7 +63,23 @@ class NetTest(Screen):
         text(s, c["sum"] or ("In attesa" if c["st"] == "wait" else ""), (x, r.centery + 10), 12, col,
              anchor="midleft", maxw=right - x)
 
+    def _record(self):
+        """Ogni test finito va nello storico (data/history-net.jsonl)."""
+        self.last_hist = history.add(self.mgr.ctx.data_dir, "net", net_entry(self.diag))
+
     def update(self, now):
+        h = self.last_hist
+        if h and not h.get("switch") and not h.get("port") and self.diag.listener.neighbor:
+            nb = self.diag.listener.neighbor   # l'annuncio dello switch è arrivato dopo la fine dei controlli
+            patch = {k: nb.get(src) for k, src in (("switch", "name"), ("port", "port"), ("port_desc", "port_desc"),
+                                                     ("vlan", "vlan"), ("voice_vlan", "voice_vlan"),
+                                                     ("mgmt", "mgmt"), ("proto", "proto"))}
+            patch["switch"] = patch["switch"] or nb.get("chassis") or ""
+            h.update(patch)
+            try:
+                history.update(self.mgr.ctx.data_dir, "net", h["t"], patch)
+            except OSError:
+                pass
         # ridisegno 2 volte al secondo mentre qualcosa è in corso (contatori e icona che gira)
         busy = self.diag.running or self.diag.get("switch")["st"] == "run"
         if busy and now >= self.next_tick:

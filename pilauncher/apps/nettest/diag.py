@@ -15,6 +15,7 @@ class Diagnosis:
 
     def __init__(self, on_change, get_targets=lambda: []):
         self.on_change, self.get_targets = on_change, get_targets
+        self.on_finished = None   # chiamata a fine sequenza (storico)
         self.dhcp_info = None
         self.dhcp_took = None
         self.dcs = []
@@ -115,6 +116,11 @@ class Diagnosis:
                 self._safe(key, step)
         finally:
             self.running = False
+            if self.on_finished and self.li and self.li.get("carrier"):
+                try:
+                    self.on_finished()
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
             self.on_change()
 
     def _safe(self, key, step):

@@ -9,7 +9,10 @@ from core import wifidiag as wd
 from core.framework import Screen
 from core.ui import T, Button, ListView, icon_wifi, rrect, signal_bars, text
 
+from core import history
+
 from apps.nettest.common import Detail, status_icon
+from apps.nettest.history import HistoryScreen
 from apps.nettest.report import ReportView, save
 
 IFACE = wd.IFACE
@@ -66,6 +69,7 @@ class WifiTest(Screen):
             self.aps, self.src, self.err, self.link = res
             self.hints = wd.analyze(self.aps, self.link)
             self.scanned_at = time.time()
+            self.record()
             self.build()
         self.mgr.run(job, done, "Scansione Wi-Fi…")
 
@@ -81,6 +85,8 @@ class WifiTest(Screen):
              "go": lambda: self.mgr.push(ConnTest(self.mgr))},
             {"title": "Monitor segnale e roaming", "sub": "Segnale nel tempo e cambi di AP mentre ti sposti",
              "go": lambda: self.mgr.push(Monitor(self.mgr, self))},
+            {"title": "Storico Wi-Fi", "sub": "Tutte le scansioni con data, ora, rete e segnale",
+             "go": lambda: self.mgr.push(HistoryScreen(self.mgr, "wifi"))},
             {"title": f"Avvisi ({len(self.hints)})" if self.hints else "Nessun avviso",
              "sub": self.hints[0] if self.hints else "Situazione Wi-Fi senza problemi evidenti",
              "go": (lambda: self.mgr.push(Detail(self.mgr, "Avvisi Wi-Fi", [], self.hints))) if self.hints else None,
@@ -119,6 +125,21 @@ class WifiTest(Screen):
             text(s, f"{lk['signal']:.0f} dBm", (card.right - 12, card.y + 20), 18, sig_color(lk["signal"]), bold=True,
                  anchor="midright")
             text(s, q, (card.right - 12, card.y + 40), 12, sig_color(lk["signal"]), anchor="midright")
+
+    def record(self):
+        lk = self.link or {}
+        nets = wd.group_by_ssid(self.aps)
+        entry = {"ssid": lk.get("ssid") if lk.get("connected") else "", "bssid": lk.get("bssid") or "",
+                 "channel": lk.get("channel"), "band": wd.band_of(lk["freq"]) if lk.get("freq") else "",
+                 "signal": round(lk["signal"]) if lk.get("signal") is not None else None,
+                 "rate": wd.short_rate(lk.get("rx_rate")) if lk.get("connected") else "",
+                 "n_networks": len(nets), "n_aps": len(self.aps), "hints": self.hints,
+                 "networks": [[n["ssid"] or "(nascosta)", len(n["aps"]),
+                               round(n["best"]) if n["best"] is not None else None] for n in nets[:12]]}
+        try:
+            history.add(self.mgr.ctx.data_dir, "wifi", entry)
+        except OSError:
+            pass
 
     def report(self):
         if not self.scanned_at:

@@ -5,7 +5,8 @@ A pocket-sized IT helpdesk tool built from a Raspberry Pi 4 and a 3.5" touch scr
 At its core is **PiLauncher**, a touch launcher written in Python/pygame. It starts at boot, draws straight to the
 framebuffer (no desktop environment), reads the touch panel directly, and updates itself from this repository's
 GitHub releases. On top of it run the apps: a wired **Network tester** that tells you which switch port a wall socket is
-patched to, a **Wi-Fi tester** for signal, channels and roaming problems, and a **Settings** app.
+patched to, a **Wi-Fi tester** for signal, channels and roaming problems, **Quick Keyboard** that types BitLocker
+recovery keys and other text into a PC over USB-C, and a **Settings** app.
 
 > The user interface is in Italian. Screenshots below are rendered from the real launcher code with sample data.
 
@@ -22,6 +23,8 @@ patched to, a **Wi-Fi tester** for signal, channels and roaming problems, and a 
   - [Settings](#settings)
   - [Network tester](#network-tester)
   - [Wi-Fi tester](#wi-fi-tester)
+  - [History](#history)
+  - [Quick Keyboard](#quick-keyboard)
 - [Over-the-air updates](#over-the-air-updates)
 - [Useful commands](#useful-commands)
 - [Repository layout](#repository-layout)
@@ -139,6 +142,7 @@ network* passively listens to ARP traffic for 25 s and suggests the subnet, the 
 ones that are being looked for but not answering (often the IP of the PC that was unplugged from that socket).
 
 **Tools**:
+- **Socket history**: every test with date and time (see [History](#history)).
 - **Saved reports**: read them again, show them as a QR code, or share them on a read-only web page.
 - **Company servers**: the list of servers to check on every test (see below).
 - **Continuous ping** to any address, with a latency graph.
@@ -191,6 +195,7 @@ Uses the Pi's own Wi-Fi radio (2.4 and 5 GHz) and the `iw` command, which gives 
 - **Warnings**: a device stuck on a weak AP while a much stronger one of the same network is available, signal below
   -67 dBm (where voice and video start to suffer), 2.4 GHz-only networks, congested channels, 2.4 GHz APs outside
   channels 1/6/11, obsolete security.
+- **Wi-Fi history**: every scan with date and time (see [History](#history)).
 - **Report** with QR code, like the network tester.
 
 <p align="center">
@@ -200,6 +205,66 @@ Uses the Pi's own Wi-Fi radio (2.4 and 5 GHz) and the `iw` command, which gives 
 
 The Pi 4 radio does not see 6 GHz (Wi-Fi 6E) networks. If `iw` is missing, the app falls back to NetworkManager
 with fewer details.
+
+### History
+
+<p align="center">
+  <img src="docs/screenshots/history-net.png" width="420" alt="Socket history">
+</p>
+
+Every completed test is recorded automatically, with date and time:
+- **Socket history** (Network tester → Strumenti → Storico prese): switch, port, port description, data and voice
+  VLAN, switch management IP, 802.1X, IP address, gateway, time to get an address, link speed and the result of every
+  check. If the switch announcement (LLDP/CDP) arrives after the checks have finished, the same entry is completed.
+- **Wi-Fi history** (Wi-Fi tester → Storico Wi-Fi): network, access point, channel, signal, speed, number of visible
+  networks and APs, warnings and the strongest signal of each network.
+
+Both lists can be searched with the on-screen or a USB keyboard (switch name, port, VLAN, IP, network…), and entries
+can be deleted one by one or all together. Over time the socket history becomes a map of which socket is patched to
+which switch port. It is stored only on the Pi, in `/opt/pilauncher/data/history-net.jsonl` and
+`history-wifi.jsonl` (last 2000 entries each).
+
+### Quick Keyboard
+
+<p align="center">
+  <img src="docs/screenshots/quickkeys.png" width="420" alt="Quick Keyboard">
+  <img src="docs/screenshots/quickkeys-storage.png" width="420" alt="USB drive mode">
+</p>
+<p align="center">
+  <img src="docs/screenshots/quickkeys-keyboard.png" width="420" alt="Keyboard mode">
+  <img src="docs/screenshots/quickkeys-type.png" width="420" alt="Typing a file">
+</p>
+
+Types text files into a PC as if it were a USB keyboard. Built for BitLocker recovery keys, which otherwise have to be
+read and typed by hand, and for setup commands during Windows OOBE.
+
+1. **USB drive mode** (*Chiavetta*): connect the gadget to your own PC with the USB-C cable. The PC sees a small USB
+   drive called `TASTIERA`; copy one or more `.txt` files onto it (one BitLocker key or one text per file), eject it
+   and unplug the cable. Powered by the PC, the gadget simply switches off.
+2. Connect the gadget to the PC that needs the text. It powers up from that PC.
+3. **Keyboard mode** (*Tastiera*): the gadget now shows up as a keyboard only (the drive is not exposed to this PC).
+   Pick a file, check it and tap **Scrivi**. Tap **Elimina** to delete the file afterwards.
+
+Details:
+- **BitLocker keys are recognised automatically** (48 digits in 8 groups) and typed as digits only. The digit keys
+  are the same on Italian and US keyboards, and the gadget is a standard "boot protocol" keyboard, so it works in the
+  BitLocker pre-boot recovery screen and in the BIOS/UEFI as well as in Windows.
+- **Other text** is typed with the chosen keyboard layout of the target PC (**IT** or **US**), because letters and
+  symbols sit on different keys. Characters that the layout cannot type are listed and skipped. Optionally the
+  gadget presses Enter at the end.
+- **Privacy**: previews are masked until you tap *Mostra*; the content never goes into reports or to GitHub. Deleting
+  a file also wipes its content from the drive image. *Delete after typing* is recommended for BitLocker keys.
+- Text files saved by Notepad in UTF-8 (with or without BOM), UTF-16 or ANSI are all read correctly.
+
+Requirements and limits:
+- Only the **USB-C** port of the Pi 4 can act as a device (keyboard or drive); the four USB-A ports are host-only, so
+  a USB-A to USB-C cable from those ports to a PC does not work. On first use the app offers to add
+  `dtoverlay=dwc2,dr_mode=peripheral` to `config.txt` and reboot. Powering through the USB-C port keeps working.
+- When powered by the PC, a laptop USB-C port is usually enough; a USB-A port (500–900 mA) may not be enough for the
+  Pi and the screen. A USB-C power/data splitter lets the gadget run from a power bank while the cable carries only
+  data. Use **Spegni il gadget** before unplugging when you can.
+- Some company PCs block USB drives: in that case the USB drive mode does not show up on your PC, while the keyboard
+  mode still works on the target PC.
 
 ## Over-the-air updates
 
@@ -221,7 +286,8 @@ Layout on the Pi:
 /opt/pilauncher/
 ├── current -> releases/v1.0.3   version in use
 ├── releases/                    current and previous version
-├── data/                        config.json, calib.json, reports/ (kept across updates)
+├── data/                        config.json, calib.json, reports/, history-*.jsonl,
+│                                quickkeys.img (kept across updates)
 └── guard.sh                     run by systemd before every start
 ```
 
@@ -264,11 +330,16 @@ pilauncher/
 │   ├── wifidiag.py         Wi-Fi diagnostics (iw scan, link, analysis)
 │   ├── qr.py               dependency-free QR code generator
 │   ├── webshare.py         read-only web page for reports
+│   ├── history.py          local test history
+│   ├── usbgadget.py        USB-C device mode (configfs): USB drive or keyboard
+│   ├── hidkeys.py          text to keyboard reports, Italian and US layouts
+│   ├── fatdisk.py          FAT disk image: format, list, read and wipe files
 │   └── home.py             home screen and app discovery
 └── apps/
     ├── settings.py         Settings
-    ├── nettest/            Network tester (checks, IP config, tools, reports, servers, active scans)
-    └── wifitest/           Wi-Fi tester
+    ├── nettest/            Network tester (checks, IP config, tools, reports, servers, active scans, history)
+    ├── wifitest/           Wi-Fi tester
+    └── quickkeys/          Quick Keyboard
 ```
 
 ## Writing an app
