@@ -63,7 +63,16 @@ Si collega il cavo alla porta Ethernet del Pi e i controlli partono da soli, in 
 | Indirizzo IP | Indirizzo, gateway, DNS, dominio, server DHCP e durata del lease. Se il DHCP non risponde parte un test DHCP dettagliato (vedi sotto) |
 | Gateway | Ping: tempi e pacchetti persi |
 | DNS | Risoluzione di un nome esterno e del dominio interno su ogni server DNS ricevuto |
-| Internet | Prova HTTP e HTTPS: distingue rete libera, proxy o portale, rete bloccata |
+| Internet | Prova HTTP e HTTPS: distingue rete libera, proxy o portale, rete bloccata. Percorso (traceroute) e MTU verso Internet |
+| Server aziendali | Raggiungibilità dei server inseriti a mano (porte TCP o ping) e differenza di orario con il server NTP |
+
+Dettagli raccolti in automatico, visibili toccando le righe:
+- **Switch**: spanning tree (STP, RSTP, MSTP, PVST+), root bridge, costo, cambi di topologia; avviso se l'IP arriva
+  tardi su una porta senza portfast.
+- **Indirizzo IP**: IP duplicato (sonda ARP), tutti i server DHCP che rispondono (avviso se più di uno), relay DHCP,
+  opzione 82, server NTP, TFTP per i telefoni (opzioni 66 e 150), proxy WPAD, nome DNS del tester, IPv6.
+- **Gateway**: MAC e produttore, MTU.
+- **DNS**: domain controller trovati via DNS (record SRV), presenza di `wpad.<dominio>`.
 
 Toccando una riga si vedono tutti i dettagli.
 
@@ -92,7 +101,29 @@ Toccando la riga **Indirizzo IP** si sceglie come configurare la porta del teste
 La configurazione resta salvata e vale anche ai collegamenti successivi. Prima di usare un IP fisso il tester controlla
 che non sia già occupato da un altro dispositivo (rilevamento dei duplicati di NetworkManager).
 
-Il pulsante **Strumenti** offre:
+### Report per i ticket
+Il pulsante **Report** chiede il nome della presa (proposto dalla descrizione della porta sullo switch) e salva sul
+Pi un report in testo semplice con tutti i dati. Dal report:
+- **QR code** a tutto schermo con il riassunto: si inquadra con il telefono e si incolla nel ticket. Se il testo
+  è lungo viene diviso in più pagine.
+- **Condividi via web** (in Strumenti → Report salvati): una pagina in sola lettura sulla porta 8080 con tutti i
+  report, da aprire dal PC. Si spegne da sola dopo 30 minuti ed è raggiungibile da tutte le reti a cui è collegato il Pi.
+
+Si tengono gli ultimi 200 report, in `/opt/pilauncher/data/reports/`.
+
+### Server aziendali
+In Strumenti → **Server aziendali** si inseriscono nome, indirizzo (IP o nome host) e porte TCP dei server da
+controllare a ogni test. La lista resta **solo sul Pi** (`/opt/pilauncher/data/config.json`) e non finisce su GitHub.
+Si può scrivere con la tastiera a schermo o con una **tastiera USB** (layout italiano, Invio conferma, Esc torna indietro).
+
+### Scansioni attive
+In Strumenti → **Scansioni attive**, spente finché non si attiva l'interruttore:
+- **Dispositivi nella rete**: richiesta ARP a ogni indirizzo della rete (massimo /22), con nome DNS e produttore;
+- **Porte aperte** su un indirizzo: prova 23 porte comuni (file, dominio, desktop remoto, stampa, web…).
+
+Inviano traffico a molti indirizzi: vanno usate solo dove si è autorizzati.
+
+Il pulsante **Strumenti** offre anche:
 - **Ping continuo** verso un indirizzo a scelta, con grafico dei tempi;
 - **Lampeggia la porta sullo switch**: spegne e riaccende il link ogni 1,5 s per 30 s, così il LED della porta
   nell'armadio di rete lampeggia e si trova la presa giusta;
@@ -100,8 +131,9 @@ Il pulsante **Strumenti** offre:
 - **Rinnova DHCP** con il tempo impiegato;
 - **Risolvi un nome** su tutti i DNS ricevuti.
 
-Il tester ascolta solo il traffico di servizio dello switch (LLDP, CDP, 802.1X) e non invia nulla di insolito sulla
-rete, a parte il lampeggio della porta, che va avviato a mano.
+Durante il test automatico il tester ascolta il traffico di servizio dello switch (LLDP, CDP, STP, 802.1X) e invia
+solo traffico normale per un PC: richieste DHCP, una sonda ARP per il proprio indirizzo, ping, DNS, connessioni ai
+server configurati e un traceroute. Lampeggio della porta e scansioni attive vanno avviati a mano.
 
 ## Aggiornamenti OTA
 ```
@@ -152,10 +184,13 @@ pilauncher/
 │   ├── keyboard.py         tastiera a schermo
 │   ├── system.py           Wi-Fi, Bluetooth, data/ora, info di sistema, alimentazione
 │   ├── updater.py          aggiornamenti OTA
-│   ├── netdiag.py          diagnostica di rete (link, LLDP/CDP, 802.1X, DHCP, ping, DNS, HTTP)
+│   ├── netdiag.py          diagnostica di rete (link, LLDP/CDP/STP, 802.1X, DHCP, ARP, ping, DNS, TCP, NTP, HTTP)
+│   ├── qr.py               generatore di QR code senza dipendenze
+│   ├── webshare.py         pagina web dei report
+│   ├── usbkbd.py           tastiere USB/Bluetooth (layout italiano)
 │   └── home.py             home e ricerca automatica delle app
 └── apps/
-    ├── nettest.py          app Tester rete
+    ├── nettest/            app Tester rete (diag, main, ipconf, tools, report, targets, active)
     └── settings.py         app Impostazioni
 ```
 

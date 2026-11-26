@@ -155,6 +155,11 @@ class Screen:
             elif act is not None and act.hit(pos):
                 act.on_tap(pos)
 
+    def on_key(self, kind, val):
+        """Tastiera fisica. Di base Esc torna indietro."""
+        if kind == "key" and val == "esc" and self.title is not None and self.back:
+            self.go_back()
+
     def go_back(self):
         self.mgr.pop()
 
@@ -325,6 +330,10 @@ class Manager:
                     self.home()
                 return
         top.dispatch(kind, pos)
+        self.dirty = True
+
+    def key(self, kind, val):
+        self.top.on_key(kind, val)
         self.dirty = True
 
     def update(self, now):

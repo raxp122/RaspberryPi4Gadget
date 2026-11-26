@@ -25,6 +25,7 @@ from core.framework import Context, Manager, load_json, save_json  # noqa: E402
 from core.home import Home, discover_apps  # noqa: E402
 from core.touch import Touch, find_device  # noqa: E402
 from core.updater import CONFIRM_AFTER, Updater  # noqa: E402
+from core.usbkbd import UsbKeyboards  # noqa: E402
 
 LEGACY_CALIB = "/home/raspberry/pipboy/touch_calib.json"
 
@@ -52,6 +53,7 @@ def main():
     if ctx.cal is None or "--calibrate" in sys.argv:
         mgr.push(CalibScreen(mgr))
 
+    keyboards = UsbKeyboards()
     surf = pygame.Surface(display.size)
     last_draw, last_min = 0.0, -1
     started = time.time()
@@ -73,6 +75,8 @@ def main():
                 time.sleep(0.05)
             for ev in touch.poll():
                 mgr.dispatch(ev)
+            for kind, val in keyboards.poll():
+                mgr.key(kind, val)
             mgr.process()
             now = time.time()
             mgr.update(now)

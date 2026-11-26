@@ -84,6 +84,18 @@ class Keyboard(Screen):
             self.shift = False
         self.build()
 
+    def on_key(self, kind, val):
+        if kind == "char":
+            self.value += val
+        elif val == "bksp":
+            self.value = self.value[:-1]
+        elif val == "enter":
+            self.press("ok")
+            return
+        elif val == "esc":
+            self.mgr.pop()
+            return
+
     def draw_content(self, s):
         rrect(s, T["surface"], self.field, 8)
         rrect(s, T["accent"], self.field, 8, 1)
