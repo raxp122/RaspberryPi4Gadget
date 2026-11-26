@@ -285,7 +285,8 @@ def _csum(b):
 
 
 def _dhcp_discover(mac, xid):
-    opts = bytes([53, 1, 1]) + bytes([61, 7, 1]) + mac + bytes([55, 6, 1, 3, 6, 15, 51, 54]) + b"\xff"
+    want = [1, 3, 6, 15, 42, 51, 54, 66, 150, 252]
+    opts = bytes([53, 1, 1]) + bytes([61, 7, 1]) + mac + bytes([55, len(want)] + want) + b"\xff"
     bootp = struct.pack(">BBBBIHH4s4s4s4s16s64s128s", 1, 1, 6, 0, xid, 0, 0x8000, bytes(4), bytes(4), bytes(4),
                         bytes(4), mac + bytes(10), bytes(64), bytes(128)) + b"\x63\x82\x53\x63" + opts
     udp = struct.pack(">HHHH", 68, 67, 8 + len(bootp), 0) + bootp
@@ -313,7 +314,8 @@ def _dhcp_parse(frame, xid):
         return None
     res = {"yiaddr": socket.inet_ntoa(b[16:20]), "giaddr": socket.inet_ntoa(b[24:28]), "src_ip": src_ip,
            "src_mac": _mac(frame[6:12]), "type": None, "server": None, "mask": None, "router": None,
-           "dns": [], "lease": None, "opt82": False}
+           "dns": [], "lease": None, "opt82": False, "domain": None, "ntp": [], "tftp": None, "tftp_ips": [],
+           "wpad": None}
     i = 240
     while i < len(b) and b[i] != 255:
         if b[i] == 0:
@@ -336,6 +338,16 @@ def _dhcp_parse(frame, xid):
             res["lease"] = struct.unpack(">I", v)[0]
         elif t == 82:
             res["opt82"] = True
+        elif t == 15:
+            res["domain"] = _txt(v)
+        elif t == 42:
+            res["ntp"] = [socket.inet_ntoa(v[j:j + 4]) for j in range(0, ln - 3, 4)]
+        elif t == 66:
+            res["tftp"] = _txt(v)
+        elif t == 150:
+            res["tftp_ips"] = [socket.inet_ntoa(v[j:j + 4]) for j in range(0, ln - 3, 4)]
+        elif t == 252:
+            res["wpad"] = _txt(v)
     return res
 
 
@@ -494,7 +506,311 @@ def dns_query(server, name, iface=IFACE, timeout=2.0):
     return {"ok": bool(ips), "ips": ips, "ms": ms, "error": "" if ips else "Nessun indirizzo"}
 
 
-# ================================================================= Internet
+def _read_name(data, off, depth=0):
+    labels = []
+    while depth < 20:
+        n = data[off]
+        if n == 0:
+            off += 1
+            break
+        if n & 0xC0 == 0xC0:
+            ptr = struct.unpack(">H", data[off:off + 2])[0] & 0x3FFF
+            labels.append(_read_name(data, ptr, depth + 1)[0])
+            off += 2
+            break
+        labels.append(data[off + 1:off + 1 + n].decode("ascii", "replace"))
+        off += n + 1
+    return ".".join(x for x in labels if x), off
+
+
+QTYPES = {"A": 1, "PTR": 12, "SRV": 33}
+
+
+def dns_lookup(server, name, qtype="A", iface=IFACE, timeout=2.0):
+    """Query DNS generica (A, PTR, SRV). Ritorna {ok, answers:[str], ms, error}."""
+    qt = QTYPES[qtype]
+    tid = random.randint(0, 0xFFFF)
+    q = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
+    q += b"".join(bytes([len(p)]) + p.encode() for p in name.strip(".").split(".")) + b"\0"
+    q += struct.pack(">HH", qt, 1)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        if iface:
+            try:
+                s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b"\0")
+            except OSError:
+                pass
+        s.settimeout(timeout)
+        t0 = time.time()
+        s.sendto(q, (server, 53))
+        while True:
+            data, _ = s.recvfrom(4096)
+            if len(data) >= 12 and struct.unpack(">H", data[:2])[0] == tid:
+                break
+        ms = (time.time() - t0) * 1000
+    except socket.timeout:
+        return {"ok": False, "answers": [], "ms": None, "error": "Nessuna risposta"}
+    except OSError as e:
+        return {"ok": False, "answers": [], "ms": None, "error": str(e)}
+    finally:
+        s.close()
+    flags, qd, an = struct.unpack(">HHH", data[2:8])
+    if flags & 0xF:
+        return {"ok": False, "answers": [], "ms": ms, "error": "Nome inesistente" if flags & 0xF == 3 else
+                f"Errore {flags & 0xF}"}
+    off, answers = 12, []
+    try:
+        for _ in range(qd):
+            off = _skip_name(data, off) + 4
+        for _ in range(an):
+            off = _skip_name(data, off)
+            typ, _cls, _ttl, ln = struct.unpack(">HHIH", data[off:off + 10])
+            off += 10
+            rd = data[off:off + ln]
+            if typ == qt == 1 and ln == 4:
+                answers.append(socket.inet_ntoa(rd))
+            elif typ == qt == 12:
+                answers.append(_read_name(data, off)[0])
+            elif typ == qt == 33 and ln > 6:
+                prio, weight, port = struct.unpack(">HHH", rd[:6])
+                answers.append(f"{_read_name(data, off + 6)[0]}:{port}")
+            off += ln
+    except (IndexError, struct.error):
+        return {"ok": False, "answers": [], "ms": ms, "error": "Risposta non valida"}
+    return {"ok": bool(answers), "answers": answers, "ms": ms, "error": "" if answers else "Nessun record"}
+
+
+def reverse_name(ip):
+    return ".".join(reversed(ip.split("."))) + ".in-addr.arpa"
+
+
+def resolve(host, servers, iface=IFACE):
+    """Nome -> IP usando i DNS della porta (se host è già un IP lo ritorna)."""
+    if valid_ip(host):
+        return host, ""
+    err = "Nessun server DNS"
+    for srv in servers[:3]:
+        r = dns_lookup(srv, host, "A", iface)
+        if r["ok"]:
+            return r["answers"][0], ""
+        err = r["error"]
+    return None, err
+
+
+# ============================================================ TCP e NTP
+def tcp_check(ip, port, iface=IFACE, timeout=2.0):
+    """Connessione TCP: {ok, ms, error}."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if iface:
+            try:
+                s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b"\0")
+            except OSError:
+                pass
+        s.settimeout(timeout)
+        t0 = time.time()
+        s.connect((ip, int(port)))
+        return {"ok": True, "ms": (time.time() - t0) * 1000, "error": ""}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "error": "Nessuna risposta (filtrata?)"}
+    except ConnectionRefusedError:
+        return {"ok": False, "ms": None, "error": "Rifiutata (servizio spento)"}
+    except OSError as e:
+        return {"ok": False, "ms": None, "error": e.strerror or str(e)}
+    finally:
+        s.close()
+
+
+def ntp_offset(server, iface=IFACE, timeout=2.0):
+    """Differenza in secondi tra l'ora del server NTP e quella del Pi (positiva = Pi indietro)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        if iface:
+            try:
+                s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b"\0")
+            except OSError:
+                pass
+        s.settimeout(timeout)
+        t0 = time.time()
+        s.sendto(b"\x1b" + bytes(47), (server, 123))
+        data, _ = s.recvfrom(256)
+        t1 = time.time()
+        if len(data) < 48:
+            return None
+        sec, frac = struct.unpack(">II", data[40:48])
+        srv = sec - 2208988800 + frac / 2 ** 32
+        return srv - (t0 + t1) / 2
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+# ======================================================== ARP: duplicati e scansione
+def _arp_frame(src_mac, src_ip, dst_ip):
+    return (b"\xff" * 6 + src_mac + b"\x08\x06" + struct.pack(">HHBBH", 1, 0x0800, 6, 4, 1) + src_mac
+            + socket.inet_aton(src_ip) + bytes(6) + socket.inet_aton(dst_ip))
+
+
+def _arp_replies(sock, until, mac_self):
+    """Raccoglie le risposte ARP fino al tempo 'until': {ip: mac}."""
+    out = {}
+    while time.time() < until:
+        try:
+            f = sock.recv(256)
+        except socket.timeout:
+            continue
+        a = f[14:42]
+        if len(a) < 28 or a[6:8] != b"\x00\x02" or a[8:14] == mac_self:
+            continue
+        out.setdefault(socket.inet_ntoa(a[14:18]), _mac(a[8:14]))
+    return out
+
+
+def arp_duplicate(ip, iface=IFACE, wait=2.0):
+    """Sonda ARP (RFC 5227) per il proprio IP: ritorna il MAC di chi lo usa già, o None."""
+    mac = bytes.fromhex((_sys("address", iface) or "00:00:00:00:00:00").replace(":", ""))
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+    try:
+        s.bind((iface, 0))
+        s.settimeout(0.2)
+        frame = _arp_frame(mac, "0.0.0.0", ip)
+        until = time.time() + wait
+        for _ in range(3):
+            s.send(frame)
+            r = _arp_replies(s, min(until, time.time() + wait / 3), mac)
+            if ip in r:
+                return r[ip]
+        return None
+    finally:
+        s.close()
+
+
+def arp_scan(network, src_ip, iface=IFACE, wait=3.0, progress=None):
+    """Scansione attiva: richiesta ARP a ogni indirizzo della rete (max /22). Ritorna [(ip, mac)]."""
+    import ipaddress
+    net = ipaddress.IPv4Network(network, strict=False)
+    if net.prefixlen < 22:
+        net = ipaddress.IPv4Network(f"{src_ip}/22", strict=False)
+    mac = bytes.fromhex((_sys("address", iface) or "00:00:00:00:00:00").replace(":", ""))
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+    found = {}
+    try:
+        s.bind((iface, 0))
+        s.settimeout(0.05)
+        hosts = [str(h) for h in net.hosts() if str(h) != src_ip]
+        for i, h in enumerate(hosts):
+            s.send(_arp_frame(mac, src_ip, h))
+            if i % 16 == 15:
+                found.update(_arp_replies(s, time.time() + 0.02, mac))
+                if progress:
+                    progress(i + 1, len(hosts), len(found))
+        found.update(_arp_replies(s, time.time() + wait, mac))
+    finally:
+        s.close()
+    return sorted(found.items(), key=lambda kv: tuple(int(x) for x in kv[0].split(".")))
+
+
+# ========================================================== vicini e MAC
+OUI_FILES = ["/usr/share/ieee-data/oui.txt", "/usr/share/arp-scan/ieee-oui.txt"]
+_oui_cache = {}
+
+
+def vendor(mac):
+    """Produttore dal MAC, se sul Pi c'è il database OUI (pacchetto ieee-data)."""
+    if not mac:
+        return ""
+    key = mac.upper().replace(":", "")[:6]
+    if not _oui_cache:
+        _oui_cache["_"] = ""
+        for path in OUI_FILES:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if "(base 16)" in line:
+                            k, _, name = line.partition("(base 16)")
+                            _oui_cache[k.strip()] = name.strip()
+                        elif "\t" in line and len(line) > 7 and line[6] == "\t":
+                            _oui_cache.setdefault(line[:6].upper(), line[7:].strip())
+                break
+            except OSError:
+                continue
+    return _oui_cache.get(key, "")
+
+
+def neighbor_mac(ip, iface=IFACE):
+    rc, out, _ = run(["ip", "-j", "neigh", "show", "dev", iface, ip], 5)
+    try:
+        for n in json.loads(out) if rc == 0 and out.strip() else []:
+            if n.get("lladdr"):
+                return n["lladdr"]
+    except ValueError:
+        pass
+    return None
+
+
+def ipv6_info(iface=IFACE):
+    info = {"addrs": [], "router": None}
+    rc, out, _ = run(["ip", "-j", "-6", "addr", "show", "dev", iface, "scope", "global"], 5)
+    try:
+        for a in (json.loads(out)[0].get("addr_info", []) if rc == 0 and out.strip() else []):
+            info["addrs"].append(f"{a['local']}/{a['prefixlen']}")
+    except (ValueError, IndexError, KeyError):
+        pass
+    rc, out, _ = run(["ip", "-j", "-6", "route", "show", "default", "dev", iface], 5)
+    try:
+        r = json.loads(out) if rc == 0 and out.strip() else []
+        if r:
+            info["router"] = r[0].get("gateway")
+    except ValueError:
+        pass
+    return info
+
+
+# ====================================================== MTU e traceroute
+def path_mtu(host, iface=IFACE):
+    """MTU massima senza frammentazione verso host (ricerca binaria con ping DF). None se ICMP bloccato."""
+    def ok(size):
+        rc, out, _ = run(["ping", "-n", "-q", "-c", "1", "-W", "1", "-M", "do", "-s", str(size), "-I", iface, host], 4)
+        return " 1 received" in out or " 1 packets received" in out
+    if not ok(548):
+        return None
+    lo, hi = 548, 1472
+    if ok(hi):
+        return hi + 28
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if ok(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo + 28
+
+
+_HOP = re.compile(r"From ([\d.]+).*(?:Time to live exceeded|ttl)", re.I)
+_REPLY = re.compile(r"bytes from ([\d.]+)")
+
+
+def traceroute(host, max_hops=15, iface=IFACE, progress=None):
+    """Percorso verso host con ping a TTL crescente. Ritorna [(ttl, ip|None)] e se è arrivato."""
+    hops, misses = [], 0
+    for ttl in range(1, max_hops + 1):
+        rc, out, _ = run(["ping", "-n", "-c", "1", "-W", "1", "-t", str(ttl), "-I", iface, host], 4)
+        m = _REPLY.search(out)
+        if m:
+            hops.append((ttl, m.group(1)))
+            return hops, True
+        m = _HOP.search(out)
+        hops.append((ttl, m.group(1) if m else None))
+        misses = 0 if m else misses + 1
+        if progress:
+            progress(hops)
+        if misses >= 3:
+            break
+    return hops, False
+
+
+# ===================================================================== ping
 def http_check(url, iface=IFACE, timeout=6):
     """Ritorna {code, ms, error}. code 0 = nessuna risposta."""
     cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "-m", str(timeout)]
@@ -568,6 +884,8 @@ PACKET_MR_MULTICAST = 0
 MAC_LLDP = bytes.fromhex("0180c200000e")
 MAC_CDP = bytes.fromhex("01000ccccccc")
 MAC_PAE = bytes.fromhex("0180c2000003")
+MAC_STP = bytes.fromhex("0180c2000000")
+MAC_PVST = bytes.fromhex("01000ccccccd")
 
 
 def _mac(b):
@@ -671,6 +989,27 @@ def parse_cdp(payload):
     return info
 
 
+def parse_bpdu(b, pvst=False):
+    """BPDU di spanning tree -> dict (None se non valido)."""
+    if len(b) < 4 or b[:2] != b"\x00\x00":
+        return None
+    ver, typ = b[2], b[3]
+    if typ == 0x80:
+        return {"proto": "STP", "tcn": True}
+    if len(b) < 35:
+        return None
+    flags = b[4]
+    rp, rmac = struct.unpack(">H", b[5:7])[0], _mac(b[7:13])
+    cost = struct.unpack(">I", b[13:17])[0]
+    bp, bmac = struct.unpack(">H", b[17:19])[0], _mac(b[19:25])
+    name = {0: "STP", 2: "RSTP", 3: "MSTP"}.get(ver, f"STP v{ver}")
+    if pvst:
+        name = "PVST+" if ver == 0 else "Rapid PVST+"
+    return {"proto": name, "root_prio": rp & 0xF000, "root_ext": rp & 0x0FFF, "root_mac": rmac, "cost": cost,
+            "bridge_prio": bp & 0xF000, "bridge_mac": bmac, "port_id": f"{struct.unpack('>H', b[25:27])[0]:#06x}",
+            "tc": bool(flags & 1), "is_root_port": cost == 0}
+
+
 def parse_frame(frame):
     """Frame Ethernet completo -> ('lldp'|'cdp'|'eapol', dict) oppure None."""
     if len(frame) < 18:
@@ -688,6 +1027,12 @@ def parse_frame(frame):
         return "eapol", res
     if et <= 1500 and dst == MAC_CDP and frame[off:off + 8] == b"\xaa\xaa\x03\x00\x00\x0c\x20\x00":
         return "cdp", parse_cdp(frame[off + 8:])
+    if et <= 1500 and dst == MAC_STP and frame[off:off + 3] == b"\x42\x42\x03":
+        r = parse_bpdu(frame[off + 3:])
+        return ("stp", r) if r else None
+    if et <= 1500 and dst == MAC_PVST and frame[off:off + 8] == b"\xaa\xaa\x03\x00\x00\x0c\x01\x0b":
+        r = parse_bpdu(frame[off + 8:], pvst=True)
+        return ("stp", r) if r else None
     return None
 
 
@@ -696,7 +1041,7 @@ class NeighborListener:
 
     def __init__(self, iface=IFACE, on_change=None):
         self.iface, self.on_change = iface, on_change
-        self.lldp = self.cdp = self.eapol = None
+        self.lldp = self.cdp = self.eapol = self.stp = None
         self.started = time.time()
         self.error = ""
         self._stop = threading.Event()
@@ -705,7 +1050,7 @@ class NeighborListener:
     def start(self):
         try:
             idx = socket.if_nametoindex(self.iface)
-            for proto, macs in ((ETH_P_LLDP, [MAC_LLDP]), (ETH_P_PAE, [MAC_PAE]), (ETH_P_802_2, [MAC_CDP])):
+            for proto, macs in ((ETH_P_LLDP, [MAC_LLDP]), (ETH_P_PAE, [MAC_PAE]), (ETH_P_802_2, [MAC_CDP, MAC_STP, MAC_PVST])):
                 s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(proto))
                 s.bind((self.iface, 0))
                 for mac in macs:
@@ -725,7 +1070,7 @@ class NeighborListener:
         return self
 
     def reset(self):
-        self.lldp = self.cdp = self.eapol = None
+        self.lldp = self.cdp = self.eapol = self.stp = None
         self.started = time.time()
 
     def _loop(self, s):
@@ -742,6 +1087,8 @@ class NeighborListener:
             if not res:
                 continue
             kind, data = res
+            if kind == "stp" and data.get("tcn"):
+                continue
             data["at"] = time.time()
             setattr(self, kind, data)
             if self.on_change:
