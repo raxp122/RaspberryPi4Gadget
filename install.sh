@@ -22,7 +22,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "==> Pacchetti necessari"
-$SUDO apt-get install -y python3-pygame network-manager bluez fonts-dejavu-core curl ca-certificates ethtool iputils-ping ieee-data
+$SUDO apt-get install -y python3-pygame network-manager bluez fonts-dejavu-core curl ca-certificates ethtool iputils-ping ieee-data iw
 
 mkdir -p "$TMP/pkg"
 if [ -n "$BRANCH" ]; then

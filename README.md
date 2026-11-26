@@ -32,7 +32,7 @@ Dal Raspberry, via SSH:
 curl -fsSL https://raw.githubusercontent.com/raxp122/RaspberryPi4Gadget/main/install.sh | bash
 ```
 Lo script:
-1. installa i pacchetti necessari (`python3-pygame`, `network-manager`, `bluez`, `fonts-dejavu-core`, `ethtool`, ...);
+1. installa i pacchetti necessari (`python3-pygame`, `network-manager`, `bluez`, `fonts-dejavu-core`, `ethtool`, `iw`, ...);
 2. scarica l'ultima release, ne verifica lo SHA-256 e la mette in `/opt/pilauncher`;
 3. importa calibrazione e impostazioni da una vecchia installazione in `~/pilauncher`, se c'è;
 4. crea il servizio `pilauncher.service` (avvio automatico) e disattiva il login testuale su tty1 (SSH resta attivo).
@@ -50,6 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/raxp122/RaspberryPi4Gadget/<branch>
 - La barra di stato mostra Wi-Fi, Bluetooth, temperatura della CPU, `⚡` se l'alimentazione è insufficiente
   e `↑` se c'è un aggiornamento.
 - **Tester rete**: diagnostica della presa Ethernet per l'helpdesk (vedi sotto).
+- **Tester Wi-Fi**: reti e AP visibili, canali, collegamento attuale, test della connessione, monitor del roaming.
 - **Impostazioni**: Wi-Fi, Bluetooth, Schermo e touch (rotazione, calibrazione, velocità SPI), Data e ora,
   Sistema, Aggiornamenti, Alimentazione.
 
@@ -135,6 +136,20 @@ Durante il test automatico il tester ascolta il traffico di servizio dello switc
 solo traffico normale per un PC: richieste DHCP, una sonda ARP per il proprio indirizzo, ping, DNS, connessioni ai
 server configurati e un traceroute. Lampeggio della porta e scansioni attive vanno avviati a mano.
 
+## Tester Wi-Fi
+Usa la scheda Wi-Fi del Pi (2,4 e 5 GHz) e il comando `iw` per avere più dettagli di quelli di NetworkManager.
+
+- **Collegamento attuale**: rete, AP (BSSID e produttore), canale e banda, segnale in dBm con giudizio
+  (ottimo ≥ -55, buono ≥ -67, sufficiente ≥ -75, scarso), velocità di collegamento.
+- **Reti visibili**: tutte le reti con numero di AP, bande e sicurezza; per ogni AP segnale, canale, larghezza,
+  standard (n/ac/ax), client collegati e occupazione del canale (se l'AP li pubblica), supporto al roaming 802.11k/v/r.
+- **Occupazione dei canali**: grafico degli AP per canale a 2,4 e 5 GHz.
+- **Test della connessione**: IP, gateway, DNS e Internet sul Wi-Fi.
+- **Monitor segnale e roaming**: segnale ogni secondo, ping al gateway e cambi di AP mentre ci si sposta.
+- **Avvisi**: dispositivo agganciato a un AP più debole di un altro della stessa rete, segnale sotto -67 dBm,
+  rete solo a 2,4 GHz, canale congestionato, AP a 2,4 GHz fuori da 1/6/11, sicurezza obsoleta.
+- **Report**: come per il Tester rete, con QR code e pagina web.
+
 ## Aggiornamenti OTA
 ```
 push su main ──► GitHub Action "Release" ──► release vX.Y.N ──► il Pi la vede ──► Installa dal touch
@@ -188,9 +203,11 @@ pilauncher/
 │   ├── qr.py               generatore di QR code senza dipendenze
 │   ├── webshare.py         pagina web dei report
 │   ├── usbkbd.py           tastiere USB/Bluetooth (layout italiano)
+│   ├── wifidiag.py         diagnostica Wi-Fi (scansione iw, collegamento, analisi)
 │   └── home.py             home e ricerca automatica delle app
 └── apps/
     ├── nettest/            app Tester rete (diag, main, ipconf, tools, report, targets, active)
+    ├── wifitest/           app Tester Wi-Fi
     └── settings.py         app Impostazioni
 ```
 

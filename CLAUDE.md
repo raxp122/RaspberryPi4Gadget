@@ -45,6 +45,7 @@ Comunicazione con l'utente in italiano.
 - `core/webshare.py`: pagina dei report sulla porta 8080, spegnimento automatico dopo 30 min.
 - `core/usbkbd.py`: tastiere evdev con layout italiano, eventi a `Screen.on_key(kind, val)` (Esc = indietro).
 - Le dipendenze apt nuove vanno aggiunte in `install.sh`, ma i Pi aggiornati via OTA non le ricevono: il codice deve funzionare anche senza (es. `ieee-data` per i produttori dei MAC è facoltativo).
+- `core/wifidiag.py` + `apps/wifitest/`: Tester Wi-Fi. Scansione con `iw dev wlan0 scan` (ripiego `scan dump`, poi nmcli), parser di BSS Load (client, occupazione), HT/VHT/HE, RSN, 802.11k/v/r; `link_info` da `iw link` + `station dump`; `analyze` produce gli avvisi (AP più forte ignorato, segnale < -67, canali 2,4 fuori 1/6/11, congestione). Il report riusa `apps/nettest/report.py`.
 - `apps/settings.py`: Wi-Fi, Bluetooth, Schermo e touch, Data e ora, Sistema, Aggiornamenti, Alimentazione.
 - Servizio systemd `pilauncher.service` (gira come root, Restart=always). `getty@tty1` è disattivato.
 
@@ -54,4 +55,7 @@ Comunicazione con l'utente in italiano.
 - Log: `journalctl -u pilauncher -f`. Riavvio: `sudo systemctl restart pilauncher`.
 
 ## Stato
-Launcher installato e funzionante, avvio automatico attivo. Aggiornamenti OTA funzionanti. Aggiunta l'app Tester rete (da provare sulla rete aziendale: LLDP/CDP, 802.1X, test cavo col PHY BCM54213PE non verificati). Prossimi passi: verificare Wi-Fi e Bluetooth sull'hardware reale, poi aggiungere altre app.
+Launcher installato e funzionante, avvio automatico attivo. Aggiornamenti OTA funzionanti. Aggiunta l'app Tester rete (da provare sulla rete aziendale: LLDP/CDP, 802.1X, test cavo col PHY BCM54213PE non verificati). Prossimi passi (vedi anche le idee della KB in fondo): verificare Wi-Fi e Bluetooth sull'hardware reale, poi aggiungere altre app.
+
+## Idee dalla KB aziendale (da fare)
+IP Scanner con lista di IP attesi, Reachability Check con handshake TLS, Printer Probe (ping, SNMP, 9100, LPR, IPP) e etichetta ZPL di prova, SIP OPTIONS ping, gadget USB-C (tastiera HID per sequenze Autopilot/OOBE e diskpart, chiavetta virtuale con installer), checklist operative locali (consegna, enrollment, dismissione), Status Board dei job, Room Kit (orologio a schermo intero, test display PoE).
