@@ -685,7 +685,8 @@ class ArpScreen(Screen):
 
     def use(self):
         r = self.res
-        preset = {"gw": r["gateway"] or "", "prefix": 24, "addr": r["subnet"] + "."}
+        addr = r["missing"][0] if r.get("missing") else r["subnet"] + "."
+        preset = {"gw": r["gateway"] or "", "prefix": 24, "addr": addr}
         self.mgr.pop()
         self.mgr.push(ProfileEdit(self.mgr, self.main, None, preset))
 
@@ -713,11 +714,18 @@ class ArpScreen(Screen):
         for i, (k, v) in enumerate(rows):
             text(s, k, (x, b.y + 12 + i * 40), 12, T["muted"])
             text(s, v, (x, b.y + 28 + i * 40), 16, bold=True)
+        miss = r.get("missing") or []
+        if miss:
+            line = "Cercati ma assenti (forse l'IP di questa presa): " + ", ".join(
+                f"{ip} ({r['targets'][ip]}×)" for ip in miss[:3])
+            for i, ln in enumerate(wrap(line, 12, b.w - 32)[:2]):
+                text(s, ln, (x, b.y + 140 + i * 17), 12, T["accent2"])
         seen = sorted(r["ips"], key=lambda ip: tuple(int(p) for p in ip.split(".")))[:12]
         if seen:
             text(s, "Indirizzi già in uso (da evitare):", (b.centerx + 10, b.y + 12), 12, T["muted"])
-            for i, ip in enumerate(seen):
-                text(s, ip, (b.centerx + 10 + (i // 6) * 100, b.y + 30 + (i % 6) * 18), 12)
+            for i, ip in enumerate(seen[:10] if miss else seen):
+                n = 5 if miss else 6
+                text(s, ip, (b.centerx + 10 + (i // n) * 100, b.y + 30 + (i % n) * 18), 12)
 
 
 # ================================================================ strumenti

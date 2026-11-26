@@ -72,7 +72,9 @@ Toccando la riga **Indirizzo IP** si sceglie come configurare la porta del teste
 - **Automatico (DHCP)**;
 - uno degli **IP fissi salvati** (indirizzo, maschera, gateway, DNS e una nota, ad esempio la presa o l'ufficio);
 - **Rileva la rete della porta**: ascolta per 25 secondi le richieste ARP degli altri dispositivi e propone la rete
-  /24 e il gateway più probabili, con l'elenco degli indirizzi già in uso.
+  /24 e il gateway più probabili, con l'elenco degli indirizzi già in uso. Mostra anche gli indirizzi **cercati ma
+  assenti**: dispositivi che la rete prova a raggiungere ma che non rispondono, tra cui spesso il PC scollegato da
+  quella presa. È un indizio, non una certezza: con gli IP fissi l'indirizzo sta nel PC, non nella presa.
 
 La configurazione resta salvata e vale anche ai collegamenti successivi. Prima di usare un IP fisso il tester controlla
 che non sia già occupato da un altro dispositivo (rilevamento dei duplicati di NetworkManager).

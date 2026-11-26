@@ -267,7 +267,11 @@ def sniff_arp(secs=20, iface=IFACE, stop=None, progress=None):
     if subnet:
         cand = {ip: c for ip, c in targets.items() if ip.startswith(subnet + ".")}
         gw = max(cand, key=cand.get) if cand else None
-    return {"ips": ips, "targets": targets, "subnet": subnet, "gateway": gw}
+    # indirizzi cercati più volte da altri ma che non rispondono mai: dispositivi spenti o scollegati,
+    # tra cui spesso il PC che di solito sta su questa presa
+    missing = sorted((ip for ip, c in targets.items() if ip not in ips and c >= 2 and ip != gw
+                      and (not subnet or ip.startswith(subnet + "."))), key=lambda ip: -targets[ip])
+    return {"ips": ips, "targets": targets, "subnet": subnet, "gateway": gw, "missing": missing}
 
 
 # ===================================================================== ping
