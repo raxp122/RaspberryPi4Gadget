@@ -80,6 +80,7 @@ class Diagnosis:
         self.rerun = threading.Event()
         self.running = False
         self.link_up_at = None
+        self.probe_sum = ""
         self.listener = nd.NeighborListener(on_change=self._changed)
         self.reset("wait", "")
 
@@ -116,6 +117,8 @@ class Diagnosis:
         while not self.stop.is_set():
             up = nd.carrier()
             if up != was_up or self.rerun.is_set():
+                if self.rerun.is_set() and up:
+                    self.link_up_at = time.time()
                 self.rerun.clear()
                 was_up = up
                 if up:
@@ -180,25 +183,36 @@ class Diagnosis:
 
     def _check_ip(self):
         t0 = self.link_up_at or time.time()
+        probed = False
         while not self.stop.is_set():
             ipi = nd.ip_info()
             self.ipi = ipi
             if ipi["addr"]:
                 break
-            waited = time.time() - t0
-            if waited > DHCP_WAIT or not nd.carrier():
-                self._dhcp_failed(ipi)
+            if not nd.carrier() or self.rerun.is_set():
                 return False
-            self.set("ip", "run", f"Attesa DHCP… {int(waited)} s · tocca per l'IP fisso")
+            waited = time.time() - t0
+            if waited > DHCP_WAIT and not probed:
+                probed = True
+                self._dhcp_failed(ipi)
+            elif probed:
+                # non ci si arrende: alcune porte danno l'IP dopo 1-2 minuti (802.1X con ripiego sul MAC)
+                c = self.get("ip")
+                self.set("ip", "fail", f"{self.probe_sum} · attendo ancora ({int(waited)} s)", c["rows"], c["hints"])
+            else:
+                self.set("ip", "run", f"Attesa DHCP… {int(waited)} s · tocca per l'IP fisso")
             self.stop.wait(1)
         else:
             return False
+        took = time.time() - t0
         rows = [("Indirizzo", f"{ipi['addr']}/{ipi['prefix']}"),
                 ("Tipo", "DHCP" if ipi["dynamic"] else "Statico"),
                 ("Gateway", ipi["gateway"] or "—"),
                 ("DNS", ", ".join(ipi["dns"]) or "—"),
                 ("Dominio", ipi["domain"] or "—"),
                 ("Server DHCP", ipi["dhcp_server"] or "—")]
+        if ipi["dynamic"] and took >= 2:
+            rows.insert(2, ("Tempo per ottenere l'IP", f"{took:.0f} s dal collegamento"))
         if ipi["lease_time"]:
             rows.append(("Durata lease", _dur(ipi["lease_time"])))
         if ipi["lease_left"] is not None:
@@ -206,11 +220,14 @@ class Diagnosis:
         hints = []
         if ipi["addr"].startswith("169.254."):
             hints.append("Indirizzo automatico 169.254: il DHCP non ha risposto")
+        if ipi["dynamic"] and took > 30:
+            hints.append(f"L'indirizzo è arrivato dopo {took:.0f} s: porta lenta (spanning tree senza portfast "
+                         "o 802.1X con ripiego sul MAC)")
         if not ipi["gateway"]:
             hints.append("Nessun gateway ricevuto dal DHCP")
         if not ipi["dns"]:
             hints.append("Nessun server DNS ricevuto dal DHCP")
-        kind = "DHCP" if ipi["dynamic"] else "fisso"
+        kind = (f"DHCP in {took:.0f} s" if took >= 2 else "DHCP") if ipi["dynamic"] else "fisso"
         self.set("ip", "warn" if hints else "ok", f"{ipi['addr']}/{ipi['prefix']} · {kind}", rows, hints)
         return True
 
@@ -227,8 +244,10 @@ class Diagnosis:
             hints.insert(0, "Il server risponde alla prova diretta ma il sistema non ha preso l'indirizzo: "
                             "usa Rinnova DHCP negli strumenti")
         rows.append(("Stato NetworkManager", ipi["nm_state"] or "—"))
-        self.set("ip", "warn" if st == "ok" else "fail", summary + " · tocca per dettagli", rows,
-                 hints + self._no_dhcp_hints())
+        self.probe_sum = summary
+        self.set("ip", "warn" if st == "ok" else "fail", summary + " · attendo ancora", rows,
+                 hints + ["Il tester continua ad aspettare: alcune porte danno l'indirizzo dopo 1-2 minuti"]
+                 + self._no_dhcp_hints())
 
     def _no_dhcp_hints(self):
         h = []

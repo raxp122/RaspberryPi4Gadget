@@ -73,6 +73,10 @@ Quando il DHCP non risponde, il tester invia da solo le richieste DHCP per 12 se
 - quanti **pacchetti** arrivano dalla porta e da quanti dispositivi;
 - se il **link cade** durante la prova (porta bloccata da port security).
 
+Dopo il test il tester **continua ad aspettare**: alcune porte aziendali danno l'indirizzo solo dopo 1–2 minuti
+(spanning tree senza portfast, 802.1X con ripiego sul MAC). Quando l'IP arriva i controlli proseguono da soli
+e il tempo impiegato compare nella riga Indirizzo IP.
+
 Così si distingue una porta morta (nessun traffico) da una porta attiva che ignora il tester (port security,
 assegnazione legata al MAC del PC, NAC/802.1X). Il test si può lanciare anche da Strumenti.
 
