@@ -60,12 +60,24 @@ Si collega il cavo alla porta Ethernet del Pi e i controlli partono da soli, in 
 |---|---|
 | Cavo e link | Velocità, duplex, massimo supportato dallo switch, errori CRC. Avvisa se il link è a 100 Mbit/s quando entrambi arrivano a 1 Gbit/s (tipico di un cavo con coppie rotte) |
 | Switch e porta | Nome dello switch, porta, descrizione, VLAN dati e voce, IP di gestione, letti dagli annunci LLDP e CDP (ascolto fino a 65 s). Rileva se la porta chiede l'autenticazione 802.1X |
-| Indirizzo IP | Indirizzo, gateway, DNS, dominio, server DHCP e durata del lease. Se il DHCP non risponde suggerisce le cause (802.1X, VLAN) |
+| Indirizzo IP | Indirizzo, gateway, DNS, dominio, server DHCP e durata del lease. Se il DHCP non risponde suggerisce le cause (802.1X, VLAN, IP fisso) |
 | Gateway | Ping: tempi e pacchetti persi |
 | DNS | Risoluzione di un nome esterno e del dominio interno su ogni server DNS ricevuto |
 | Internet | Prova HTTP e HTTPS: distingue rete libera, proxy o portale, rete bloccata |
 
-Toccando una riga si vedono tutti i dettagli. Il pulsante **Strumenti** offre:
+Toccando una riga si vedono tutti i dettagli.
+
+### Prese con IP fisso
+Toccando la riga **Indirizzo IP** si sceglie come configurare la porta del tester:
+- **Automatico (DHCP)**;
+- uno degli **IP fissi salvati** (indirizzo, maschera, gateway, DNS e una nota, ad esempio la presa o l'ufficio);
+- **Rileva la rete della porta**: ascolta per 25 secondi le richieste ARP degli altri dispositivi e propone la rete
+  /24 e il gateway più probabili, con l'elenco degli indirizzi già in uso.
+
+La configurazione resta salvata e vale anche ai collegamenti successivi. Prima di usare un IP fisso il tester controlla
+che non sia già occupato da un altro dispositivo (rilevamento dei duplicati di NetworkManager).
+
+Il pulsante **Strumenti** offre:
 - **Ping continuo** verso un indirizzo a scelta, con grafico dei tempi;
 - **Lampeggia la porta sullo switch**: spegne e riaccende il link ogni 1,5 s per 30 s, così il LED della porta
   nell'armadio di rete lampeggia e si trova la presa giusta;

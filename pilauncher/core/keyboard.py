@@ -24,11 +24,11 @@ class Key(Button):
 
 
 class Keyboard(Screen):
-    def __init__(self, mgr, title, on_done, initial="", password=False, ok_label="OK"):
+    def __init__(self, mgr, title, on_done, initial="", password=False, ok_label="OK", layout="abc"):
         super().__init__(mgr)
         self.title = title
         self.on_done, self.value, self.password, self.ok_label = on_done, initial, password, ok_label
-        self.layout, self.shift, self.reveal = "abc", False, False
+        self.layout, self.shift, self.reveal = layout, False, False
 
     def build(self):
         b = self.body

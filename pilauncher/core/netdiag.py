@@ -166,6 +166,110 @@ def renew_dhcp(iface=IFACE, timeout=40):
     return True, dt, ""
 
 
+# ======================================================== profilo di rete
+NM_CON = "pilauncher-eth0"
+
+
+def parse_prefix(v):
+    """'24', '/24' o '255.255.255.0' -> 24 (None se non valido)."""
+    import ipaddress
+    v = str(v).strip().lstrip("/")
+    try:
+        if "." in v:
+            return ipaddress.IPv4Network(f"0.0.0.0/{v}").prefixlen
+        n = int(v)
+        return n if 0 < n <= 32 else None
+    except ValueError:
+        return None
+
+
+def valid_ip(v):
+    import ipaddress
+    try:
+        ipaddress.IPv4Address(str(v).strip())
+        return True
+    except ValueError:
+        return False
+
+
+def apply_ip_config(prof, iface=IFACE, timeout=20):
+    """Configura eth0 con NetworkManager. prof None = DHCP, altrimenti {addr, prefix, gw, dns:[...]}.
+
+    Usa un profilo dedicato con priorità alta, così resta valido anche ai prossimi collegamenti del cavo.
+    Ritorna (ok, messaggio)."""
+    rc, out, _ = run(["nmcli", "-t", "-f", "NAME", "connection", "show"], 5)
+    if NM_CON not in out.splitlines():
+        rc, out, err = run(["nmcli", "connection", "add", "type", "ethernet", "ifname", iface, "con-name", NM_CON,
+                            "connection.autoconnect", "yes", "connection.autoconnect-priority", "100"], 10)
+        if rc != 0:
+            return False, (err or out).strip()[:160]
+    if prof is None:
+        args = ["ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", "", "ipv4.dns", "",
+                "ipv4.dad-timeout", "-1"]
+    else:
+        args = ["ipv4.method", "manual", "ipv4.addresses", f"{prof['addr']}/{prof['prefix']}",
+                "ipv4.gateway", prof.get("gw") or "", "ipv4.dns", " ".join(prof.get("dns") or []),
+                "ipv4.dad-timeout", "3000"]
+    rc, out, err = run(["nmcli", "connection", "modify", NM_CON] + args, 10)
+    if rc != 0:
+        return False, (err or out).strip().replace("Error: ", "")[:160]
+    if not carrier(iface):
+        return True, "Salvato: verrà usato quando colleghi il cavo"
+    rc, out, err = run(["nmcli", "--wait", str(timeout), "connection", "up", NM_CON], timeout + 10)
+    if rc != 0:
+        txt = (err or out).lower()
+        if prof is not None and ("ip configuration" in txt or "dad" in txt or "already" in txt):
+            return False, f"{prof['addr']} sembra già usato da un altro dispositivo"
+        if prof is None:
+            return False, "Nessuna risposta DHCP"
+        return False, (err or out).strip().replace("Error: ", "")[:160]
+    return True, "Configurazione applicata"
+
+
+# ============================================================ ascolto ARP
+def sniff_arp(secs=20, iface=IFACE, stop=None, progress=None):
+    """Ascolta le richieste ARP sulla porta per capire la rete: ritorna
+    {ips: {ip: n}, targets: {ip: n}, subnet, gateway} con subnet /24 più frequente e gateway più richiesto."""
+    ips, targets = {}, {}
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+    try:
+        s.bind((iface, 0))
+        s.settimeout(0.5)
+        t_end = time.time() + secs
+        while time.time() < t_end and not (stop and stop.is_set()):
+            if progress:
+                progress(secs - int(t_end - time.time()), secs, len(ips))
+            try:
+                f = s.recv(256)
+            except socket.timeout:
+                continue
+            off = 14
+            if len(f) >= 18 and f[12:14] == b"\x81\x00":
+                off = 18
+            a = f[off:off + 28]
+            if len(a) < 28 or a[:2] != b"\x00\x01" or a[2:4] != b"\x08\x00":
+                continue
+            spa, tpa = socket.inet_ntoa(a[14:18]), socket.inet_ntoa(a[24:28])
+            if spa != "0.0.0.0":
+                ips[spa] = ips.get(spa, 0) + 1
+            if a[7] == 1 and tpa != spa:
+                targets[tpa] = targets.get(tpa, 0) + 1
+    finally:
+        s.close()
+    nets = {}
+    for ip in list(ips) + list(targets):
+        if ip.startswith(("169.254.", "0.")):
+            continue
+        n = ip.rsplit(".", 1)[0]
+        nets[n] = nets.get(n, 0) + ips.get(ip, 0) + targets.get(ip, 0)
+    subnet = max(nets, key=nets.get) if nets else None
+    gw = None
+    if subnet:
+        cand = {ip: c for ip, c in targets.items() if ip.startswith(subnet + ".")}
+        gw = max(cand, key=cand.get) if cand else None
+    return {"ips": ips, "targets": targets, "subnet": subnet, "gateway": gw}
+
+
 # ===================================================================== ping
 _PING_RX = re.compile(r"(\d+) packets transmitted, (\d+) (?:packets )?received")
 _PING_RTT = re.compile(r"= ([\d.]+)/([\d.]+)/([\d.]+)")

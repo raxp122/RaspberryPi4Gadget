@@ -39,7 +39,7 @@ Comunicazione con l'utente in italiano.
 - `core/system.py`: wrapper per nmcli (Wi-Fi), bluetoothctl, timedatectl, vcgencmd, e modifica della velocità SPI in config.txt.
 - `core/home.py`: orologio e griglia delle app. Le app vengono trovate automaticamente: ogni modulo in `apps/` con un dizionario `APP = {name, icon, color, order, screen}`.
 - `core/netdiag.py`: diagnostica di eth0 (sysfs + ethtool per il link, socket AF_PACKET per LLDP/CDP/EAPOL, `ip -j` e nmcli per IP/DHCP, ping, query DNS fatte a mano con SO_BINDTODEVICE, curl --interface per HTTP/HTTPS, ethtool --cable-test, lampeggio porta con ip link down/up).
-- `apps/nettest.py`: app Tester rete per l'helpdesk (l'utente lavora all'helpdesk di Aboca). Sequenza automatica al collegamento del cavo, dettagli per riga, strumenti (ping continuo, lampeggio porta, test cavo, rinnovo DHCP, DNS).
+- `apps/nettest.py`: app Tester rete per l'helpdesk (l'utente lavora all'helpdesk di Aboca). Sequenza automatica al collegamento del cavo, dettagli per riga, strumenti (ping continuo, lampeggio porta, test cavo, rinnovo DHCP, DNS). In azienda le prese hanno IP fissi: la riga Indirizzo IP apre la configurazione (DHCP o profili IP fisso salvati in config.json sotto `nettest`, applicati con il profilo NetworkManager `pilauncher-eth0` con DAD) e il rilevamento della rete via ARP passivo.
 - `apps/settings.py`: Wi-Fi, Bluetooth, Schermo e touch, Data e ora, Sistema, Aggiornamenti, Alimentazione.
 - Servizio systemd `pilauncher.service` (gira come root, Restart=always). `getty@tty1` è disattivato.
 
