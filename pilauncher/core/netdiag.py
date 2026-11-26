@@ -166,6 +166,251 @@ def renew_dhcp(iface=IFACE, timeout=40):
     return True, dt, ""
 
 
+# ======================================================== profilo di rete
+NM_CON = "pilauncher-eth0"
+
+
+def parse_prefix(v):
+    """'24', '/24' o '255.255.255.0' -> 24 (None se non valido)."""
+    import ipaddress
+    v = str(v).strip().lstrip("/")
+    try:
+        if "." in v:
+            return ipaddress.IPv4Network(f"0.0.0.0/{v}").prefixlen
+        n = int(v)
+        return n if 0 < n <= 32 else None
+    except ValueError:
+        return None
+
+
+def valid_ip(v):
+    import ipaddress
+    try:
+        ipaddress.IPv4Address(str(v).strip())
+        return True
+    except ValueError:
+        return False
+
+
+def apply_ip_config(prof, iface=IFACE, timeout=20):
+    """Configura eth0 con NetworkManager. prof None = DHCP, altrimenti {addr, prefix, gw, dns:[...]}.
+
+    Usa un profilo dedicato con priorità alta, così resta valido anche ai prossimi collegamenti del cavo.
+    Ritorna (ok, messaggio)."""
+    rc, out, _ = run(["nmcli", "-t", "-f", "NAME", "connection", "show"], 5)
+    if NM_CON not in out.splitlines():
+        rc, out, err = run(["nmcli", "connection", "add", "type", "ethernet", "ifname", iface, "con-name", NM_CON,
+                            "connection.autoconnect", "yes", "connection.autoconnect-priority", "100"], 10)
+        if rc != 0:
+            return False, (err or out).strip()[:160]
+    if prof is None:
+        args = ["ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", "", "ipv4.dns", "",
+                "ipv4.dad-timeout", "-1"]
+    else:
+        args = ["ipv4.method", "manual", "ipv4.addresses", f"{prof['addr']}/{prof['prefix']}",
+                "ipv4.gateway", prof.get("gw") or "", "ipv4.dns", " ".join(prof.get("dns") or []),
+                "ipv4.dad-timeout", "3000"]
+    rc, out, err = run(["nmcli", "connection", "modify", NM_CON] + args, 10)
+    if rc != 0:
+        return False, (err or out).strip().replace("Error: ", "")[:160]
+    if not carrier(iface):
+        return True, "Salvato: verrà usato quando colleghi il cavo"
+    rc, out, err = run(["nmcli", "--wait", str(timeout), "connection", "up", NM_CON], timeout + 10)
+    if rc != 0:
+        txt = (err or out).lower()
+        if prof is not None and ("ip configuration" in txt or "dad" in txt or "already" in txt):
+            return False, f"{prof['addr']} sembra già usato da un altro dispositivo"
+        if prof is None:
+            return False, "Nessuna risposta DHCP"
+        return False, (err or out).strip().replace("Error: ", "")[:160]
+    return True, "Configurazione applicata"
+
+
+# ============================================================ ascolto ARP
+def sniff_arp(secs=20, iface=IFACE, stop=None, progress=None):
+    """Ascolta le richieste ARP sulla porta per capire la rete: ritorna
+    {ips: {ip: n}, targets: {ip: n}, subnet, gateway} con subnet /24 più frequente e gateway più richiesto."""
+    ips, targets = {}, {}
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+    try:
+        s.bind((iface, 0))
+        s.settimeout(0.5)
+        t_end = time.time() + secs
+        while time.time() < t_end and not (stop and stop.is_set()):
+            if progress:
+                progress(secs - int(t_end - time.time()), secs, len(ips))
+            try:
+                f = s.recv(256)
+            except socket.timeout:
+                continue
+            off = 14
+            if len(f) >= 18 and f[12:14] == b"\x81\x00":
+                off = 18
+            a = f[off:off + 28]
+            if len(a) < 28 or a[:2] != b"\x00\x01" or a[2:4] != b"\x08\x00":
+                continue
+            spa, tpa = socket.inet_ntoa(a[14:18]), socket.inet_ntoa(a[24:28])
+            if spa != "0.0.0.0":
+                ips[spa] = ips.get(spa, 0) + 1
+            if a[7] == 1 and tpa != spa:
+                targets[tpa] = targets.get(tpa, 0) + 1
+    finally:
+        s.close()
+    nets = {}
+    for ip in list(ips) + list(targets):
+        if ip.startswith(("169.254.", "0.")):
+            continue
+        n = ip.rsplit(".", 1)[0]
+        nets[n] = nets.get(n, 0) + ips.get(ip, 0) + targets.get(ip, 0)
+    subnet = max(nets, key=nets.get) if nets else None
+    gw = None
+    if subnet:
+        cand = {ip: c for ip, c in targets.items() if ip.startswith(subnet + ".")}
+        gw = max(cand, key=cand.get) if cand else None
+    # indirizzi cercati più volte da altri ma che non rispondono mai: dispositivi spenti o scollegati,
+    # tra cui spesso il PC che di solito sta su questa presa
+    missing = sorted((ip for ip, c in targets.items() if ip not in ips and c >= 2 and ip != gw
+                      and (not subnet or ip.startswith(subnet + "."))), key=lambda ip: -targets[ip])
+    return {"ips": ips, "targets": targets, "subnet": subnet, "gateway": gw, "missing": missing}
+
+
+# ============================================================ prova DHCP
+def _csum(b):
+    if len(b) % 2:
+        b += b"\0"
+    t = sum(struct.unpack(f">{len(b) // 2}H", b))
+    t = (t >> 16) + (t & 0xFFFF)
+    t += t >> 16
+    return ~t & 0xFFFF
+
+
+def _dhcp_discover(mac, xid):
+    opts = bytes([53, 1, 1]) + bytes([61, 7, 1]) + mac + bytes([55, 6, 1, 3, 6, 15, 51, 54]) + b"\xff"
+    bootp = struct.pack(">BBBBIHH4s4s4s4s16s64s128s", 1, 1, 6, 0, xid, 0, 0x8000, bytes(4), bytes(4), bytes(4),
+                        bytes(4), mac + bytes(10), bytes(64), bytes(128)) + b"\x63\x82\x53\x63" + opts
+    udp = struct.pack(">HHHH", 68, 67, 8 + len(bootp), 0) + bootp
+    ip = struct.pack(">BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), random.randint(0, 0xFFFF), 0, 64, 17, 0,
+                     bytes(4), b"\xff" * 4)
+    ip = ip[:10] + struct.pack(">H", _csum(ip)) + ip[12:]
+    return b"\xff" * 6 + mac + b"\x08\x00" + ip + udp
+
+
+def _dhcp_parse(frame, xid):
+    off = 14
+    if frame[12:14] == b"\x81\x00":
+        off = 18
+    if frame[off - 2:off] != b"\x08\x00" or len(frame) < off + 28:
+        return None
+    ihl = (frame[off] & 0x0F) * 4
+    if frame[off + 9] != 17:
+        return None
+    src_ip = socket.inet_ntoa(frame[off + 12:off + 16])
+    u = off + ihl
+    if struct.unpack(">H", frame[u + 2:u + 4])[0] != 68:
+        return None
+    b = frame[u + 8:]
+    if len(b) < 240 or b[0] != 2 or struct.unpack(">I", b[4:8])[0] != xid or b[236:240] != b"\x63\x82\x53\x63":
+        return None
+    res = {"yiaddr": socket.inet_ntoa(b[16:20]), "giaddr": socket.inet_ntoa(b[24:28]), "src_ip": src_ip,
+           "src_mac": _mac(frame[6:12]), "type": None, "server": None, "mask": None, "router": None,
+           "dns": [], "lease": None, "opt82": False}
+    i = 240
+    while i < len(b) and b[i] != 255:
+        if b[i] == 0:
+            i += 1
+            continue
+        t, ln = b[i], b[i + 1]
+        v = b[i + 2:i + 2 + ln]
+        i += 2 + ln
+        if t == 53 and v:
+            res["type"] = {2: "OFFER", 5: "ACK", 6: "NAK"}.get(v[0], str(v[0]))
+        elif t == 54 and ln == 4:
+            res["server"] = socket.inet_ntoa(v)
+        elif t == 1 and ln == 4:
+            res["mask"] = socket.inet_ntoa(v)
+        elif t == 3 and ln >= 4:
+            res["router"] = socket.inet_ntoa(v[:4])
+        elif t == 6:
+            res["dns"] = [socket.inet_ntoa(v[j:j + 4]) for j in range(0, ln - 3, 4)]
+        elif t == 51 and ln == 4:
+            res["lease"] = struct.unpack(">I", v)[0]
+        elif t == 82:
+            res["opt82"] = True
+    return res
+
+
+def dhcp_probe(secs=12, iface=IFACE, progress=None):
+    """Invia DHCPDISCOVER ogni 3 s e raccoglie le offerte. Conta anche il traffico che arriva sulla porta.
+    Ritorna {sent, offers:[...], frames, senders, link_lost}."""
+    mac = bytes.fromhex((_sys("address", iface) or "00:00:00:00:00:00").replace(":", ""))
+    xid = random.randint(1, 0xFFFFFFFF)
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+    res = {"sent": 0, "offers": [], "frames": 0, "senders": set(), "link_lost": False}
+    try:
+        s.bind((iface, 0))
+        s.settimeout(0.3)
+        t0, next_send = time.time(), 0
+        pkt = _dhcp_discover(mac, xid)
+        while time.time() - t0 < secs:
+            now = time.time()
+            if not carrier(iface):
+                res["link_lost"] = True
+                break
+            if now >= next_send:
+                s.send(pkt)
+                res["sent"] += 1
+                next_send = now + 3
+                if progress:
+                    progress(int(now - t0), secs, res)
+            try:
+                f, addr = s.recvfrom(2048)
+            except socket.timeout:
+                continue
+            if addr[2] == socket.PACKET_OUTGOING:
+                continue
+            res["frames"] += 1
+            res["senders"].add(f[6:12])
+            o = _dhcp_parse(f, xid)
+            if o and not any(x["server"] == o["server"] and x["yiaddr"] == o["yiaddr"] for x in res["offers"]):
+                res["offers"].append(o)
+    finally:
+        s.close()
+    res["senders"] = len(res["senders"])
+    return res
+
+
+def dhcp_probe_report(r):
+    """Risultato di dhcp_probe -> (stato, riassunto, righe, avvisi)."""
+    rows = [("Richieste inviate", str(r["sent"])), ("Pacchetti ricevuti dalla porta", str(r["frames"])),
+            ("Dispositivi che trasmettono", str(r["senders"]))]
+    hints = []
+    if r["offers"]:
+        for i, o in enumerate(r["offers"], 1):
+            tag = f"Offerta {i}" if len(r["offers"]) > 1 else "Offerta"
+            rows += [(f"{tag}: indirizzo", o["yiaddr"]), (f"{tag}: server DHCP", o["server"] or o["src_ip"]),
+                     (f"{tag}: gateway", o["router"] or "—"), (f"{tag}: DNS", ", ".join(o["dns"]) or "—")]
+            if o["giaddr"] != "0.0.0.0":
+                rows.append((f"{tag}: relay", o["giaddr"]))
+            if o["type"] == "NAK":
+                hints.append(f"Il server {o['server']} ha rifiutato la richiesta (NAK)")
+        if len(r["offers"]) > 1:
+            hints.append("Più server DHCP rispondono: possibile DHCP non autorizzato in rete")
+        o = r["offers"][0]
+        return "ok", f"Offerto {o['yiaddr']} da {o['server'] or o['src_ip']}", rows, hints
+    if r["link_lost"]:
+        hints.append("Il link è caduto durante la prova: la porta potrebbe essersi bloccata "
+                     "(port security / err-disabled). Controlla che il PC funzioni ancora su questa presa")
+        return "fail", "Link caduto durante la prova", rows, hints
+    if r["frames"] == 0:
+        hints.append("Dalla porta non arriva nessun traffico: porta disattivata, VLAN senza dispositivi "
+                     "o porta che blocca il tester")
+        return "fail", "Nessuna risposta e nessun traffico", rows, hints
+    hints.append("La rete arriva alla porta ma nessun DHCP risponde al tester")
+    hints.append("Cause tipiche: port security o assegnazione legata al MAC del PC, NAC/802.1X, "
+                 "oppure la porta usa davvero un IP fisso")
+    return "fail", f"Nessuna offerta · {r['frames']} pacchetti dalla rete", rows, hints
+
+
 # ===================================================================== ping
 _PING_RX = re.compile(r"(\d+) packets transmitted, (\d+) (?:packets )?received")
 _PING_RTT = re.compile(r"= ([\d.]+)/([\d.]+)/([\d.]+)")
