@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# File specifici del singolo dispositivo
+pilauncher/calib.json
+pilauncher/config.json
