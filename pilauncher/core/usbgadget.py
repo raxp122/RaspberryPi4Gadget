@@ -22,17 +22,32 @@ BOOT_KEYBOARD = bytes.fromhex(
 
 
 # ================================================================ abilitazione
+APPLIES = ("all", "pi4")   # sezioni di config.txt valide per un Raspberry Pi 4
+
+
+def _effective(txt):
+    """Righe di config.txt che valgono su un Pi 4 (ignora [cm4], [cm5], [pi5]… e i commenti)."""
+    section = "all"
+    for raw in txt.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        if line and not line.startswith("#") and section in APPLIES:
+            yield line
+
+
 def overlay_enabled():
+    """True se su questo Pi 4 la USB-C è configurata come dispositivo (dwc2 non in modalità host)."""
     try:
         txt = open(CONFIG_TXT).read()
     except OSError:
         return False
-    return any(line.strip().startswith("dtoverlay=dwc2") for line in txt.splitlines()
-               if not line.strip().startswith("#"))
+    return any(ln.startswith("dtoverlay=dwc2") and "dr_mode=host" not in ln for ln in _effective(txt))
 
 
 def enable_overlay():
-    """Aggiunge l'overlay dwc2 in fondo a config.txt (sotto [all]). Serve un riavvio."""
+    """Aggiunge l'overlay dwc2 in fondo a config.txt, sotto [all]. Serve un riavvio."""
     if overlay_enabled():
         return True, ""
     try:
@@ -45,10 +60,10 @@ def enable_overlay():
 
 
 def disable_overlay():
+    """Toglie solo la riga aggiunta dalla Tastiera Rapida (le altre righe dwc2, es. [cm5], restano)."""
     try:
         lines = open(CONFIG_TXT).read().splitlines()
-        out = [ln for ln in lines if not ln.strip().startswith("dtoverlay=dwc2")
-               and ln.strip() != "# Tastiera Rapida: USB-C in modalità dispositivo"]
+        out = [ln for ln in lines if ln.strip() not in (OVERLAY, "# Tastiera Rapida: USB-C in modalità dispositivo")]
         shutil.copy2(CONFIG_TXT, CONFIG_TXT + ".pilauncher.bak")
         with open(CONFIG_TXT, "w") as f:
             f.write("\n".join(out) + "\n")
